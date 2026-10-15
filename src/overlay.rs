@@ -44,22 +44,6 @@ impl CrosshairStyle {
 /// Configure the pipeline's existing `cairooverlay` named `overlay`.
 pub fn configure_crosshair(pipeline: &gst::Pipeline, style: CrosshairStyle) -> Result<(), String> {
     let style = style.validate()?;
-    let elements = pipeline
-        .iterate_elements()
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("could not inspect pipeline elements: {error}"))?;
-    let video_sink_count = elements
-        .iter()
-        .filter(|element| is_video_sink(element))
-        .count();
-
-    if video_sink_count != 1 {
-        return Err(format!(
-            "the pipeline must have exactly one video sink, found {video_sink_count}"
-        ));
-    }
-
     let overlay = pipeline
         .by_name("overlay")
         .ok_or_else(|| "pipeline must contain a cairooverlay named 'overlay'".to_owned())?;
@@ -76,34 +60,6 @@ pub fn configure_crosshair(pipeline: &gst::Pipeline, style: CrosshairStyle) -> R
     connect_draw_handler(&overlay, style);
     log::info!("Configured crosshair on the pipeline's video sink");
     Ok(())
-}
-
-fn is_video_sink(element: &gst::Element) -> bool {
-    let factory_class = element
-        .factory()
-        .and_then(|factory| factory.metadata("klass").map(str::to_owned))
-        .unwrap_or_default();
-    let has_class = |name: &str| {
-        factory_class
-            .split('/')
-            .any(|class| class.eq_ignore_ascii_case(name))
-    };
-    if !has_class("sink") {
-        return false;
-    }
-
-    if has_class("video") {
-        return true;
-    }
-    if has_class("audio") {
-        return false;
-    }
-
-    let raw_video = gst::Caps::builder("video/x-raw").build();
-    element
-        .static_pad("sink")
-        .and_then(|sink_pad| sink_pad.peer())
-        .is_some_and(|upstream_pad| upstream_pad.query_caps(None).can_intersect(&raw_video))
 }
 
 fn connect_draw_handler(overlay: &gst::Element, style: CrosshairStyle) {
@@ -194,25 +150,6 @@ mod tests {
             })
             .count();
         assert_eq!(overlay_count, 1);
-    }
-
-    #[test]
-    fn rejects_multiple_video_sinks() {
-        gst::init().unwrap();
-        if gst::ElementFactory::find("cairooverlay").is_none()
-            || gst::ElementFactory::find("autovideosink").is_none()
-        {
-            return;
-        }
-
-        let pipeline = gst::parse::launch(
-            "videotestsrc ! tee name=t t. ! queue ! cairooverlay name=overlay ! autovideosink t. ! queue ! cairooverlay name=overlay2 ! autovideosink",
-        )
-        .unwrap()
-        .downcast::<gst::Pipeline>()
-        .unwrap();
-        let error = configure_crosshair(&pipeline, CrosshairStyle::default()).unwrap_err();
-        assert!(error.contains("exactly one video sink, found 2"));
     }
 
     #[test]
