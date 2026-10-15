@@ -1,13 +1,18 @@
 //! Parses command-line arguments and provides the application's usage text.
 
 /// Command-line usage and examples printed by the help action.
-pub const USAGE: &str = "Usage: rs_gst_overlay [--pipeline|-p] <PIPELINE>
+pub const USAGE: &str = "Usage: rs_gst_overlay [--pipeline <PIPELINE> | -p <PIPELINE>]
        rs_gst_overlay '<PIPELINE>'
+       rs_gst_overlay
 
 Play a GStreamer pipeline in an egui window. The pipeline must contain an
 `appsink` named `video_sink`; its frames are displayed in the window. By
 default, the window draws a centered crosshair over the video. Toggle it with
 the Crosshair switch in the window.
+Use the Pipeline picker to search presets and switch playback. You can launch
+the window without a pipeline and select one there. A new command-line or
+GST_PIPELINE description is added to pipelines.yaml with a date-based name.
+Use Edit selected preset to rename it or change its pipeline string.
 
 The pipeline may be supplied with --pipeline (or -p), as --pipeline=<PIPELINE>,
 as a quoted positional argument, or through GST_PIPELINE. A command-line
@@ -17,6 +22,7 @@ Logging follows RUST_LOG and defaults to info (for example, RUST_LOG=debug).
 
 Examples:
   rs_gst_overlay --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
+  rs_gst_overlay
   GST_PIPELINE='videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink' rs_gst_overlay";
 
 /// The action selected from the command-line arguments.
@@ -87,6 +93,12 @@ mod tests {
                 pipeline: Some(pipeline),
             }) if pipeline == "videotestsrc ! fakesink"
         ));
+    }
+
+    #[test]
+    /// Allows launching the player without a command-line pipeline.
+    fn accepts_no_pipeline() {
+        assert!(matches!(parse_args([]), Ok(Action::Run { pipeline: None })));
     }
 
     #[test]

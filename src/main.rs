@@ -3,6 +3,7 @@
 mod cli;
 mod overlay;
 mod pipeline;
+mod pipeline_catalog;
 mod player;
 mod stream;
 
@@ -43,13 +44,11 @@ fn run() -> Result<(), String> {
         }
         cli::Action::Run { pipeline } => pipeline,
     };
-    let description = match pipeline_arg {
-        Some(description) => description,
-        None => env::var("GST_PIPELINE")
+    let description = pipeline_arg.or_else(|| {
+        env::var("GST_PIPELINE")
             .ok()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "no pipeline provided; use --pipeline or set GST_PIPELINE".to_owned())?,
-    };
+    });
 
     gstreamer::init().map_err(|error| format!("could not initialize GStreamer: {error}"))?;
     player::play(description)

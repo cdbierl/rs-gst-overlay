@@ -50,6 +50,8 @@ struct StreamState {
 enum PipelineCommand {
     /// Build a fresh runtime and start playback.
     Play,
+    /// Replace the active description and immediately run the selected pipeline.
+    Load(String),
     /// Stop the current pipeline runtime.
     Stop,
     /// Shut down the worker thread.
@@ -92,6 +94,13 @@ impl StreamHandle {
         };
         self.commands.send(command).is_ok()
     }
+
+    /// Replaces the current pipeline and starts the new description.
+    pub(crate) fn load_pipeline(&self, description: String) -> bool {
+        self.commands
+            .send(PipelineCommand::Load(description))
+            .is_ok()
+    }
 }
 
 impl Drop for StreamWorker {
@@ -106,11 +115,18 @@ impl Drop for StreamWorker {
     }
 }
 
-/// Builds the pipeline, starts its worker thread, and returns the UI handle and worker owner.
-pub(crate) fn start(description: String) -> Result<(StreamHandle, StreamWorker), String> {
-    let runtime = build_pipeline_runtime(&description)?;
+/// Optionally builds a pipeline, starts its worker thread, and returns its handle and owner.
+pub(crate) fn start(description: Option<String>) -> Result<(StreamHandle, StreamWorker), String> {
+    let runtime = description
+        .as_deref()
+        .map(build_pipeline_runtime)
+        .transpose()?;
     let state = Arc::new(Mutex::new(StreamState::default()));
-    set_message(&state, "Starting pipeline…".to_owned());
+    if runtime.is_some() {
+        set_message(&state, "Starting pipeline…".to_owned());
+    } else {
+        set_message(&state, "Select a pipeline to start".to_owned());
+    }
     let (commands, command_receiver) = mpsc::channel();
     let worker_state = Arc::clone(&state);
     let join_handle = thread::Builder::new()
@@ -131,15 +147,14 @@ pub(crate) fn start(description: String) -> Result<(StreamHandle, StreamWorker),
 
 /// Processes pipeline commands, pulls frames, and reports bus errors until shutdown.
 fn run_worker(
-    description: String,
-    runtime: PipelineRuntime,
+    mut description: Option<String>,
+    runtime: Option<PipelineRuntime>,
     state: Arc<Mutex<StreamState>>,
     commands: mpsc::Receiver<PipelineCommand>,
 ) {
-    let mut runtime = if start_pipeline(&runtime, &state) {
-        Some(runtime)
-    } else {
-        None
+    let mut runtime = match runtime {
+        Some(runtime) if start_pipeline(&runtime, &state) => Some(runtime),
+        Some(_) | None => None,
     };
 
     loop {
@@ -147,6 +162,10 @@ fn run_worker(
             match commands.try_recv() {
                 Ok(PipelineCommand::Stop) => {
                     stop_pipeline(&mut runtime, &state, "Pipeline stopped".to_owned());
+                    continue;
+                }
+                Ok(PipelineCommand::Load(new_description)) => {
+                    switch_pipeline(new_description, &mut description, &mut runtime, &state);
                     continue;
                 }
                 Ok(PipelineCommand::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => break,
@@ -182,7 +201,14 @@ fn run_worker(
         } else {
             match commands.recv() {
                 Ok(PipelineCommand::Play) => {
-                    restart_pipeline(&description, &mut runtime, &state);
+                    if let Some(description) = description.as_deref() {
+                        restart_pipeline(description, &mut runtime, &state);
+                    } else {
+                        set_message(&state, "Select a pipeline to start".to_owned());
+                    }
+                }
+                Ok(PipelineCommand::Load(new_description)) => {
+                    switch_pipeline(new_description, &mut description, &mut runtime, &state);
                 }
                 Ok(PipelineCommand::Stop) => {}
                 Ok(PipelineCommand::Shutdown) | Err(_) => break,
@@ -194,6 +220,18 @@ fn run_worker(
         let _ = runtime.pipeline.set_state(gst::State::Null);
     }
     set_playing(&state, false);
+}
+
+/// Stops the active pipeline, replaces its description, and starts a fresh runtime.
+fn switch_pipeline(
+    new_description: String,
+    description: &mut Option<String>,
+    runtime: &mut Option<PipelineRuntime>,
+    state: &Mutex<StreamState>,
+) {
+    stop_pipeline(runtime, state, "Loading selected pipeline…".to_owned());
+    *description = Some(new_description.clone());
+    restart_pipeline(&new_description, runtime, state);
 }
 
 /// Parses the description and configures its named appsink for single-buffer RGBA delivery.
@@ -372,7 +410,8 @@ fn frame_from_sample(sample: &gst::Sample) -> Result<VideoFrame, String> {
 /// Exercises appsink frame conversion and pipeline worker restart behavior.
 mod tests {
     use super::{
-        PipelineCommand, StreamState, build_pipeline_runtime, frame_from_sample, run_worker,
+        PipelineCommand, StreamHandle, StreamState, build_pipeline_runtime, frame_from_sample,
+        run_worker, start,
     };
     use gst::prelude::*;
     use gstreamer as gst;
@@ -422,8 +461,8 @@ mod tests {
         let worker_state = Arc::clone(&state);
         let worker = thread::spawn(move || {
             run_worker(
-                description.to_owned(),
-                runtime,
+                Some(description.to_owned()),
+                Some(runtime),
                 worker_state,
                 command_receiver,
             )
@@ -443,6 +482,60 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that selecting a different pipeline replaces the active runtime.
+    fn worker_can_load_a_selected_pipeline() {
+        gst::init().unwrap();
+        if !test_video_plugins_available() {
+            return;
+        }
+
+        let initial_description = "videotestsrc is-live=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink";
+        let selected_description = "videotestsrc num-buffers=1 ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink";
+        let runtime = build_pipeline_runtime(initial_description).unwrap();
+        let state = Arc::new(Mutex::new(StreamState::default()));
+        let (command_sender, command_receiver) = mpsc::channel();
+        let worker_state = Arc::clone(&state);
+        let worker = thread::spawn(move || {
+            run_worker(
+                Some(initial_description.to_owned()),
+                Some(runtime),
+                worker_state,
+                command_receiver,
+            )
+        });
+
+        assert!(wait_for_message(&state, "Pipeline playing"));
+        command_sender
+            .send(PipelineCommand::Load(selected_description.to_owned()))
+            .unwrap();
+        assert!(wait_for_message(&state, "End of stream"));
+
+        command_sender.send(PipelineCommand::Shutdown).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    /// Opens the worker with no source and starts playback after loading a preset.
+    fn worker_can_start_without_an_initial_pipeline() {
+        gst::init().unwrap();
+        if !test_video_plugins_available() {
+            return;
+        }
+
+        let (stream, worker) = start(None).unwrap();
+        assert_eq!(stream.status().message, "Select a pipeline to start");
+        assert!(stream.load_pipeline(
+            "videotestsrc is-live=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink"
+                .to_owned()
+        ));
+        assert!(wait_for_stream_message(&stream, "Pipeline playing"));
+
+        assert!(stream.set_playing(false));
+        assert!(wait_for_stream_message(&stream, "Pipeline stopped"));
+        drop(worker);
+    }
+
+    #[test]
     /// Verifies that playback can restart after the pipeline reaches end of stream.
     fn worker_can_restart_pipeline_after_end_of_stream() {
         gst::init().unwrap();
@@ -457,8 +550,8 @@ mod tests {
         let worker_state = Arc::clone(&state);
         let worker = thread::spawn(move || {
             run_worker(
-                description.to_owned(),
-                runtime,
+                Some(description.to_owned()),
+                Some(runtime),
                 worker_state,
                 command_receiver,
             )
@@ -487,6 +580,20 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if state.lock().unwrap().message == expected {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Waits up to five seconds for a worker handle to publish a status message.
+    fn wait_for_stream_message(stream: &StreamHandle, expected: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if stream.status().message == expected {
                 return true;
             }
             if Instant::now() >= deadline {

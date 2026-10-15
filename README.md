@@ -27,6 +27,8 @@ Cargo downloads and builds these direct dependencies:
 | `dotenvy` | 0.15 | Loading environment settings from `.env` |
 | `env_logger` | 0.11 | Logging configuration from `RUST_LOG` |
 | `log` | 0.4 | Logging facade |
+| `serde` | 1.0 | Serializing and deserializing pipeline presets |
+| `serde_yaml_ng` | 0.10 | Reading and writing YAML presets |
 
 ### Native dependencies
 
@@ -67,11 +69,14 @@ cargo run -- --help
 Pass a GStreamer pipeline description with `--pipeline` or `-p`, using the
 `--pipeline=<PIPELINE>` form, as one quoted positional argument, or through
 `GST_PIPELINE`. A command-line pipeline takes precedence over `GST_PIPELINE`.
+The pipeline is optional: without one, the window opens with no source active
+and you can start a preset from the toolbar picker.
 
 ```sh
 cargo run -- --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
 cargo run -- 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
 GST_PIPELINE='videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink' cargo run
+cargo run
 ```
 
 ### Video file
@@ -109,6 +114,38 @@ Playback stops when the pipeline reaches end-of-stream or reports an error. The
 window stays open so you can inspect the status and restart playback. Live
 sources normally do not reach end-of-stream on their own.
 
+## Pipeline presets
+
+The toolbar's Pipeline picker searches named presets. Selecting an entry
+immediately switches the player to that pipeline. Add or edit named presets
+directly in `pipelines.yaml`.
+
+When the app starts with a pipeline from `--pipeline`, a positional argument,
+or `GST_PIPELINE`, it adds that pipeline to the top of `pipelines.yaml` if no
+existing preset has the exact same pipeline string. The generated name uses
+the launch date and time in UTC. In the picker, choose **Edit selected
+preset…** to change its name or edit the full pipeline string. Saving a
+pipeline edit immediately loads the new description.
+
+On first launch, the app creates a config directory and a `pipelines.yaml`
+file containing a test-pattern preset. The config directory is
+`$XDG_CONFIG_HOME/rs_gst_overlay` on Linux (or `~/.config/rs_gst_overlay` when
+`XDG_CONFIG_HOME` is unset), `~/Library/Application Support/rs_gst_overlay` on
+macOS, and `%APPDATA%/rs_gst_overlay` on Windows. Set
+`RS_GST_OVERLAY_CONFIG_DIR` to use a different directory.
+
+Add or edit presets in `pipelines.yaml` using this format:
+
+```yaml
+presets:
+  - name: Test pattern
+    pipeline: >-
+      videotestsrc is-live=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink
+  - name: RTSP camera
+    pipeline: >-
+      rtspsrc location=rtsp://camera.example:8554/stream protocols=tcp latency=200 ! application/x-rtp,media=video,encoding-name=H264 ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink
+```
+
 ## Controls
 
 - Toggle the Crosshair switch to show or hide the centered green crosshair.
@@ -133,6 +170,7 @@ The main source modules are organized by responsibility:
 | `src/main.rs` | Startup, environment loading, logging, and application launch |
 | `src/cli.rs` | Command-line argument parsing |
 | `src/pipeline.rs` | Parsing GStreamer pipeline descriptions |
+| `src/pipeline_catalog.rs` | YAML pipeline presets |
 | `src/stream.rs` | Pipeline worker, appsink frame handling, status, and restart logic |
 | `src/player.rs` | egui window, toolbar, video display, and view transforms |
 | `src/overlay.rs` | Crosshair style and painting |

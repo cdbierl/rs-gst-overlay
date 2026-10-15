@@ -7,6 +7,7 @@ use egui_material3::material_symbol::material_symbol_text;
 use egui_material3::{MaterialIconButton, MaterialSlider, MaterialSwitch};
 
 use crate::overlay::{CrosshairStyle, paint_crosshair};
+use crate::pipeline_catalog::{PipelineCatalog, PipelineEntry};
 use crate::stream::StreamHandle;
 
 /// Largest zoom factor available from the toolbar or mouse wheel.
@@ -27,11 +28,16 @@ const STATUS_BAR_HEIGHT: f32 = 28.0;
 const FPS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 /// Maximum delay between UI repaint requests.
 const REPAINT_INTERVAL: Duration = Duration::from_millis(16);
+const PIPELINE_PICKER_WIDTH: f32 = 220.0;
+const PIPELINE_PICKER_MAX_HEIGHT: f32 = 260.0;
 
-/// Starts the stream worker and opens the native player window for a pipeline.
-pub fn play(description: String) -> Result<(), String> {
-    let (stream, worker) = crate::stream::start(description)?;
+/// Starts the stream worker and opens the native player window.
+pub fn play(description: Option<String>) -> Result<(), String> {
+    let (stream, worker) = crate::stream::start(description.clone())?;
     let app_stream = stream.clone();
+    let mut pipeline_catalog = PipelineCatalog::load();
+    let selected_pipeline =
+        description.map(|description| pipeline_catalog.ensure_startup_preset(&description));
     let result = eframe::run_native(
         "rs_gst_overlay",
         eframe::NativeOptions::default(),
@@ -44,7 +50,11 @@ pub fn play(description: String) -> Result<(), String> {
             );
             egui_material3::theme::load_fonts(&creation_context.egui_ctx);
             egui_material3::theme::update_window_background(&creation_context.egui_ctx);
-            Ok(Box::new(VideoApp::new(app_stream)))
+            Ok(Box::new(VideoApp::new(
+                app_stream,
+                pipeline_catalog,
+                selected_pipeline,
+            )))
         }),
     );
 
@@ -66,11 +76,23 @@ struct VideoApp {
     flip_horizontal: bool,
     flip_vertical: bool,
     toolbar_panel_height: f32,
+    pipeline_catalog: PipelineCatalog,
+    selected_pipeline: Option<PipelineEntry>,
+    pipeline_search: String,
+    preset_editor_open: bool,
+    preset_editor_original_pipeline: Option<String>,
+    preset_editor_name: String,
+    preset_editor_pipeline: String,
+    preset_editor_error: Option<String>,
 }
 
 impl VideoApp {
-    /// Creates a player UI with default view settings for the supplied stream.
-    fn new(stream: StreamHandle) -> Self {
+    /// Creates a player UI with the stream, pipeline catalog, and selected entry.
+    fn new(
+        stream: StreamHandle,
+        pipeline_catalog: PipelineCatalog,
+        selected_pipeline: Option<PipelineEntry>,
+    ) -> Self {
         Self {
             stream,
             texture: None,
@@ -84,6 +106,14 @@ impl VideoApp {
             flip_horizontal: false,
             flip_vertical: false,
             toolbar_panel_height: MIN_TOOLBAR_HEIGHT,
+            pipeline_catalog,
+            selected_pipeline,
+            pipeline_search: String::new(),
+            preset_editor_open: false,
+            preset_editor_original_pipeline: None,
+            preset_editor_name: String::new(),
+            preset_editor_pipeline: String::new(),
+            preset_editor_error: None,
         }
     }
 
@@ -132,6 +162,7 @@ impl VideoApp {
             |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(12.0, 4.0);
+                    self.show_pipeline_picker(ui);
                     ui.label("Crosshair");
                     ui.add(MaterialSwitch::new(&mut self.show_crosshair));
                     ui.label("Zoom");
@@ -168,7 +199,10 @@ impl VideoApp {
                         ("play_arrow", "Start or restart pipeline")
                     };
                     if ui
-                        .add(MaterialIconButton::filled(material_symbol_text(icon)))
+                        .add_enabled(
+                            playing || self.selected_pipeline.is_some(),
+                            MaterialIconButton::filled(material_symbol_text(icon)),
+                        )
                         .on_hover_text(tooltip)
                         .clicked()
                         && !self.stream.set_playing(!playing)
@@ -184,6 +218,185 @@ impl VideoApp {
         .inner
     }
 
+    /// Shows searchable named presets and opens the selected pipeline.
+    fn show_pipeline_picker(&mut self, ui: &mut egui::Ui) {
+        let presets = self.pipeline_catalog.presets().to_vec();
+        let selected_pipeline = self
+            .selected_pipeline
+            .as_ref()
+            .map(|entry| entry.pipeline.as_str())
+            .unwrap_or_default();
+        let selected_name = self
+            .selected_pipeline
+            .as_ref()
+            .map(|entry| entry.name.as_str())
+            .unwrap_or("Select a pipeline");
+        let can_edit_selected = presets
+            .iter()
+            .any(|entry| entry.pipeline == selected_pipeline);
+        let mut selected_entry = None;
+        let mut edit_selected = false;
+
+        ui.label("Pipeline");
+        egui::ComboBox::from_id_salt("pipeline_picker")
+            .selected_text(selected_name)
+            .width(PIPELINE_PICKER_WIDTH)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show_ui(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.pipeline_search)
+                        .hint_text("Search pipelines"),
+                );
+                ui.separator();
+
+                let query = self.pipeline_search.trim().to_owned();
+                let mut found_match = false;
+                egui::ScrollArea::vertical()
+                    .max_height(PIPELINE_PICKER_MAX_HEIGHT)
+                    .show(ui, |ui| {
+                        for entry in &presets {
+                            if !matches_pipeline_query(entry, &query) {
+                                continue;
+                            }
+                            found_match = true;
+                            let response = ui
+                                .selectable_label(selected_pipeline == entry.pipeline, &entry.name)
+                                .on_hover_text(&entry.pipeline);
+                            if response.clicked() {
+                                selected_entry = Some(entry.clone());
+                                ui.close();
+                            }
+                        }
+
+                        if !found_match {
+                            ui.label("No matching pipelines");
+                        }
+
+                        ui.separator();
+                        if ui
+                            .add_enabled(
+                                can_edit_selected,
+                                egui::Button::new("Edit selected preset…"),
+                            )
+                            .clicked()
+                        {
+                            edit_selected = true;
+                            ui.close();
+                        }
+                    });
+            });
+
+        if let Some(entry) = selected_entry {
+            self.select_pipeline(entry);
+        }
+        if edit_selected {
+            self.open_preset_editor();
+        }
+    }
+
+    /// Switches the active pipeline to the selected preset.
+    fn select_pipeline(&mut self, entry: PipelineEntry) {
+        self.pipeline_search.clear();
+        if (self
+            .selected_pipeline
+            .as_ref()
+            .is_none_or(|selected| selected.pipeline != entry.pipeline)
+            || !self.stream.status().playing)
+            && !self.stream.load_pipeline(entry.pipeline.clone())
+        {
+            log::error!("Pipeline controls are unavailable");
+            return;
+        }
+
+        self.selected_pipeline = Some(entry.clone());
+    }
+
+    /// Copies the active named preset into the editor dialog.
+    fn open_preset_editor(&mut self) {
+        let Some(selected) = self.selected_pipeline.as_ref() else {
+            return;
+        };
+        let Some(preset) = self.pipeline_catalog.find_preset(&selected.pipeline) else {
+            return;
+        };
+
+        self.preset_editor_original_pipeline = Some(preset.pipeline.clone());
+        self.preset_editor_name = preset.name;
+        self.preset_editor_pipeline = preset.pipeline;
+        self.preset_editor_error = None;
+        self.preset_editor_open = true;
+    }
+
+    /// Draws a dialog for renaming a preset or editing its full GStreamer string.
+    fn show_preset_editor(&mut self, context: &egui::Context) {
+        if !self.preset_editor_open {
+            return;
+        }
+
+        let mut open = self.preset_editor_open;
+        let mut save_requested = false;
+        let mut cancel_requested = false;
+        egui::Window::new("Edit pipeline preset")
+            .collapsible(false)
+            .resizable(true)
+            .open(&mut open)
+            .show(context, |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut self.preset_editor_name);
+                ui.add_space(6.0);
+                ui.label("GStreamer pipeline");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.preset_editor_pipeline)
+                        .desired_width(540.0)
+                        .desired_rows(6)
+                        .code_editor(),
+                );
+
+                if let Some(error) = &self.preset_editor_error {
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                }
+
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        save_requested = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel_requested = true;
+                    }
+                });
+            });
+        self.preset_editor_open = open && !cancel_requested;
+
+        if save_requested {
+            self.save_preset_editor();
+        }
+    }
+
+    /// Persists the edited preset and reloads its pipeline if the string changed.
+    fn save_preset_editor(&mut self) {
+        let Some(original_pipeline) = self.preset_editor_original_pipeline.clone() else {
+            return;
+        };
+        match self.pipeline_catalog.update_preset(
+            &original_pipeline,
+            &self.preset_editor_name,
+            &self.preset_editor_pipeline,
+        ) {
+            Ok(entry) => {
+                if entry.pipeline != original_pipeline
+                    && !self.stream.load_pipeline(entry.pipeline.clone())
+                {
+                    log::error!("Pipeline controls are unavailable");
+                }
+                self.selected_pipeline = Some(entry);
+                self.pipeline_search.clear();
+                self.preset_editor_error = None;
+                self.preset_editor_open = false;
+            }
+            Err(error) => self.preset_editor_error = Some(error),
+        }
+    }
+
     /// Draws the frame rate and current pipeline status in the bottom panel.
     fn show_status_bar(&self, ui: &mut egui::Ui, message: &str) {
         ui.horizontal_centered(|ui| {
@@ -197,7 +410,12 @@ impl VideoApp {
     /// Fits the current frame into the central panel and applies view transforms.
     fn show_video(&mut self, ui: &mut egui::Ui) {
         let Some(texture_id) = self.texture.as_ref().map(TextureHandle::id) else {
-            ui.centered_and_justified(|ui| ui.label("Waiting for video frames…"));
+            let message = if self.selected_pipeline.is_some() {
+                "Waiting for video frames…"
+            } else {
+                "Select a pipeline to start playback"
+            };
+            ui.centered_and_justified(|ui| ui.label(message));
             return;
         };
 
@@ -276,9 +494,18 @@ impl eframe::App for VideoApp {
             .show(context, |ui| self.show_status_bar(ui, &status.message));
 
         egui::CentralPanel::default().show(context, |ui| self.show_video(ui));
+        self.show_preset_editor(context);
 
         context.request_repaint_after(REPAINT_INTERVAL);
     }
+}
+
+/// Matches a pipeline entry against a case-insensitive name or description query.
+fn matches_pipeline_query(entry: &PipelineEntry, query: &str) -> bool {
+    let query = query.to_lowercase();
+    query.is_empty()
+        || entry.name.to_lowercase().contains(&query)
+        || entry.pipeline.to_lowercase().contains(&query)
 }
 
 /// Maps a display-space texture coordinate through flips, rotation, and zoom crop.
@@ -313,7 +540,8 @@ fn source_uv(
 #[cfg(test)]
 /// Tests for mapping displayed image corners to source texture coordinates.
 mod tests {
-    use super::source_uv;
+    use super::{matches_pipeline_query, source_uv};
+    use crate::pipeline_catalog::PipelineEntry;
     use eframe::egui::Pos2;
 
     #[test]
@@ -350,5 +578,18 @@ mod tests {
             source_uv(top_left, 0, false, false, 0.25),
             Pos2::new(0.25, 0.25)
         );
+    }
+
+    #[test]
+    /// Searches pipeline choices by either their name or launch description.
+    fn pipeline_search_matches_names_and_descriptions_case_insensitively() {
+        let entry = PipelineEntry {
+            name: "RTSP Camera".to_owned(),
+            pipeline: "rtspsrc location=rtsp://camera/stream".to_owned(),
+        };
+
+        assert!(matches_pipeline_query(&entry, "camera"));
+        assert!(matches_pipeline_query(&entry, "RTSP://CAMERA"));
+        assert!(!matches_pipeline_query(&entry, "file source"));
     }
 }

@@ -13,3 +13,5 @@ gstreamer = "0.23"
 gstreamer-app = "0.23"
 gstreamer-video = "0.23"
 log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml_ng = "0.10"
