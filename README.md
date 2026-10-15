@@ -1,16 +1,17 @@
 # rs_gst_overlay
 
-`rs_gst_overlay` plays a GStreamer pipeline and draws a centered green crosshair
-over the video passing through a `cairooverlay` element. The application
-configures an existing overlay in the pipeline; it does not add an overlay or a
-video sink for you.
+`rs_gst_overlay` plays a GStreamer pipeline and, by default, draws a centered
+green crosshair over the video passing through a `cairooverlay` element. Pass
+`--no-overlay` to play a pipeline without configuring a crosshair. The
+application configures an existing overlay in the pipeline; it does not add an
+overlay or a video sink for you.
 
 ## Requirements
 
 - Rust and Cargo
 - GStreamer development libraries and the GStreamer Rust bindings' native
   dependencies
-- The GStreamer `cairooverlay` plugin
+- The GStreamer `cairooverlay` plugin unless `--no-overlay` is used
 - A video sink plugin suitable for your system, such as `autovideosink`
 - The source, decoder, and converter plugins required by your pipeline
 
@@ -30,6 +31,13 @@ Run a test pattern with a video sink:
 
 ```sh
 cargo run -- --pipeline 'videotestsrc ! videoconvert ! cairooverlay name=overlay ! autovideosink'
+```
+
+To play without drawing the crosshair, use `--no-overlay`. In this mode the
+pipeline does not need a `cairooverlay` element:
+
+```sh
+cargo run -- --no-overlay --pipeline 'videotestsrc ! autovideosink'
 ```
 
 The executable can also be run directly after building:
@@ -56,10 +64,10 @@ cargo run -- 'videotestsrc ! videoconvert ! cairooverlay name=overlay ! autovide
 GST_PIPELINE='videotestsrc ! videoconvert ! cairooverlay name=overlay ! autovideosink' cargo run
 ```
 
-The pipeline must contain an element named exactly `overlay`, and that element
-must be a `cairooverlay`. Place it on the video path where the crosshair should
-be drawn, before the sink that displays that path. The application does not
-require a specific number of video sinks.
+Unless `--no-overlay` is specified, the pipeline must contain an element named
+exactly `overlay`, and that element must be a `cairooverlay`. Place it on the
+video path where the crosshair should be drawn, before the sink that displays
+that path. The application does not require a specific number of video sinks.
 
 For example, this pipeline sends video through the overlay and then to a
 display sink:

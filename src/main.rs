@@ -31,13 +31,19 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let action = cli::parse_args(env::args().skip(1))?;
-    let description = match action {
+    let (pipeline_arg, no_overlay) = match action {
         cli::Action::Help => {
             println!("{}", cli::USAGE);
             return Ok(());
         }
-        cli::Action::Run(Some(description)) => description,
-        cli::Action::Run(None) => env::var("GST_PIPELINE")
+        cli::Action::Run {
+            pipeline,
+            no_overlay,
+        } => (pipeline, no_overlay),
+    };
+    let description = match pipeline_arg {
+        Some(description) => description,
+        None => env::var("GST_PIPELINE")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "no pipeline provided; use --pipeline or set GST_PIPELINE".to_owned())?,
@@ -45,6 +51,10 @@ fn run() -> Result<(), String> {
 
     gstreamer::init().map_err(|error| format!("could not initialize GStreamer: {error}"))?;
     let pipeline = pipeline::parse(&description)?;
-    overlay::configure_crosshair(&pipeline, overlay::CrosshairStyle::default())?;
+    if no_overlay {
+        log::info!("Crosshair overlay disabled");
+    } else {
+        overlay::configure_crosshair(&pipeline, overlay::CrosshairStyle::default())?;
+    }
     player::play(pipeline)
 }
