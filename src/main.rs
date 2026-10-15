@@ -33,7 +33,7 @@ fn run() -> Result<(), String> {
     let action = cli::parse_args(env::args().skip(1))?;
     let description = match action {
         cli::Action::Help => {
-            log::info!("{}", cli::USAGE);
+            println!("{}", cli::USAGE);
             return Ok(());
         }
         cli::Action::Run(Some(description)) => description,

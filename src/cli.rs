@@ -1,9 +1,9 @@
-pub const USAGE: &str = "Usage: rs_gst [--pipeline|-p] <PIPELINE>
-       rs_gst '<PIPELINE>'
+pub const USAGE: &str = "Usage: rs_gst_overlay [--pipeline|-p] <PIPELINE>
+       rs_gst_overlay '<PIPELINE>'
 
 Play a GStreamer pipeline using the Rust GStreamer bindings.
-Include `cairooverlay name=overlay` and exactly one video sink; the app draws a
-centered crosshair with the GStreamer Cairo overlay plugin.
+Include `cairooverlay name=overlay` on a video path; the app draws a centered
+crosshair on that path with the GStreamer Cairo overlay plugin.
 
 The pipeline may be supplied with --pipeline (or -p), as a quoted positional
 argument, or through GST_PIPELINE. A command-line pipeline takes precedence.
@@ -11,8 +11,8 @@ A .env file in the current directory or a parent directory is loaded at startup.
 Logging follows RUST_LOG and defaults to info (for example, RUST_LOG=debug).
 
 Examples:
-  rs_gst --pipeline 'videotestsrc ! autovideosink'
-  GST_PIPELINE='videotestsrc ! autovideosink' rs_gst";
+  rs_gst_overlay --pipeline 'videotestsrc ! cairooverlay name=overlay ! autovideosink'
+  GST_PIPELINE='videotestsrc ! cairooverlay name=overlay ! autovideosink' rs_gst_overlay";
 
 pub enum Action {
     Help,

@@ -58,7 +58,7 @@ pub fn configure_crosshair(pipeline: &gst::Pipeline, style: CrosshairStyle) -> R
     }
 
     connect_draw_handler(&overlay, style);
-    log::info!("Configured crosshair on the pipeline's video sink");
+    log::info!("Configured crosshair on cairooverlay element 'overlay'");
     Ok(())
 }
 
