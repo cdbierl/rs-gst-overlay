@@ -63,12 +63,13 @@ include a display sink for the same video path.
 
 Pipeline playback stops at end-of-stream or when GStreamer reports an error;
 the window stays open until it is closed. Live sources normally do not reach
-end-of-stream on their own.
+end-of-stream on their own. Use the toolbar Play/Stop button to stop playback or
+restart the pipeline after an error or end-of-stream.
 
 ## Video controls
 
 Use the Material Zoom slider or scroll the mouse wheel over the video to zoom
-from 1× to 8×. Zoom crops around the center of the frame. The reset, rotate,
+from 1× to 10×. Zoom crops around the center of the frame. The reset, rotate,
 horizontal flip, and vertical flip toolbar buttons show descriptions on hover.
 
 Use Rotate to turn the video 90° clockwise. Flip H and Flip V toggle horizontal

@@ -2,6 +2,7 @@ mod cli;
 mod overlay;
 mod pipeline;
 mod player;
+mod stream;
 
 use std::env;
 use std::io::ErrorKind;
@@ -47,6 +48,5 @@ fn run() -> Result<(), String> {
     };
 
     gstreamer::init().map_err(|error| format!("could not initialize GStreamer: {error}"))?;
-    let pipeline = pipeline::parse(&description)?;
-    player::play(pipeline)
+    player::play(description)
 }
