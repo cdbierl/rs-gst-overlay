@@ -10,14 +10,17 @@ pub struct CrosshairStyle {
     pub line_width: f64,
     /// Fraction of the video width and height covered by each line.
     pub length_fraction: f64,
+    /// Radius of the centered circle in pixels.
+    pub circle_radius: f64,
 }
 
 impl Default for CrosshairStyle {
     fn default() -> Self {
         Self {
             color: [0.0, 1.0, 0.0, 0.85],
-            line_width: 4.0,
+            line_width: 3.0,
             length_fraction: 0.85,
+            circle_radius: 50.0,
         }
     }
 }
@@ -26,6 +29,9 @@ impl CrosshairStyle {
     fn validate(self) -> Result<Self, String> {
         if !self.line_width.is_finite() || self.line_width <= 0.0 {
             return Err("crosshair line width must be a positive finite number".to_owned());
+        }
+        if !self.circle_radius.is_finite() || self.circle_radius <= 0.0 {
+            return Err("crosshair circle radius must be a positive finite number".to_owned());
         }
         if !self.length_fraction.is_finite() || !(0.0..=1.0).contains(&self.length_fraction) {
             return Err("crosshair length fraction must be between 0.0 and 1.0".to_owned());
@@ -93,11 +99,20 @@ fn draw_crosshair(context: &cairo::Context, style: CrosshairStyle) {
     context.move_to(center_x, center_y - height * style.length_fraction / 2.0);
     context.line_to(center_x, center_y + height * style.length_fraction / 2.0);
     let _ = context.stroke();
+
+    context.arc(
+        center_x,
+        center_y,
+        style.circle_radius,
+        0.0,
+        std::f64::consts::TAU,
+    );
+    let _ = context.stroke();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CrosshairStyle, configure_crosshair};
+    use super::{CrosshairStyle, configure_crosshair, draw_crosshair};
     use gst::prelude::*;
     use gstreamer as gst;
 
@@ -114,12 +129,42 @@ mod tests {
         );
         assert!(
             CrosshairStyle {
+                circle_radius: f64::NAN,
+                ..CrosshairStyle::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            CrosshairStyle {
                 length_fraction: 1.1,
                 ..CrosshairStyle::default()
             }
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn draws_a_circle_around_the_crosshair_center() {
+        let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 200, 200).unwrap();
+        let context = cairo::Context::new(&surface).unwrap();
+        draw_crosshair(&context, CrosshairStyle::default());
+        drop(context);
+
+        surface.flush();
+        let stride = surface.stride() as usize;
+        let data = surface.data().unwrap();
+        let alpha_at = |x: usize, y: usize| {
+            let offset = y * stride + x * 4;
+            u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap()) >> 24
+        };
+
+        assert!(
+            alpha_at(117, 117) > 0,
+            "circle should be visible on the diagonal"
+        );
+        assert_eq!(alpha_at(110, 110), 0, "circle interior should remain clear");
     }
 
     #[test]

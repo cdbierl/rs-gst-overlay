@@ -81,9 +81,10 @@ error. Live sources normally do not reach end-of-stream on their own.
 
 ## Crosshair and logging
 
-The default crosshair is green with 85% opacity, a 4-pixel stroke, and lines
-that span 85% of the video width and height. These values are currently set in
-the application.
+The default overlay is green with 85% opacity and a 4-pixel stroke. It draws
+crosshair lines spanning 85% of the video width and height, plus an outlined
+circle with a 50-pixel radius at their center. These values are currently set
+in the application.
 
 Logging uses `RUST_LOG` and defaults to `info`. For example:
 
