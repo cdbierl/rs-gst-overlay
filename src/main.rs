@@ -52,9 +52,7 @@ fn run() -> Result<(), String> {
     gstreamer::init().map_err(|error| format!("could not initialize GStreamer: {error}"))?;
     let pipeline = pipeline::parse(&description)?;
     if no_overlay {
-        log::info!("Crosshair overlay disabled");
-    } else {
-        overlay::configure_crosshair(&pipeline, overlay::CrosshairStyle::default())?;
+        log::info!("Crosshair display disabled");
     }
-    player::play(pipeline)
+    player::play(pipeline, !no_overlay)
 }

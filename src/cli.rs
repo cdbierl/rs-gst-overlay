@@ -1,10 +1,10 @@
 pub const USAGE: &str = "Usage: rs_gst_overlay [--no-overlay] [--pipeline|-p] <PIPELINE>
        rs_gst_overlay [--no-overlay] '<PIPELINE>'
 
-Play a GStreamer pipeline using the Rust GStreamer bindings.
-By default, include `cairooverlay name=overlay` on a video path to draw a
-centered crosshair with the GStreamer Cairo overlay plugin. Use --no-overlay to
-play the pipeline without configuring a crosshair overlay.
+Play a GStreamer pipeline in an egui window. The pipeline must contain an
+`appsink` named `video_sink`; its frames are displayed in the window. By
+default, the window draws a centered crosshair over the video. Use
+--no-overlay to hide the crosshair.
 
 The pipeline may be supplied with --pipeline (or -p), as a quoted positional
 argument, or through GST_PIPELINE. A command-line pipeline takes precedence.
@@ -12,9 +12,9 @@ A .env file in the current directory or a parent directory is loaded at startup.
 Logging follows RUST_LOG and defaults to info (for example, RUST_LOG=debug).
 
 Examples:
-  rs_gst_overlay --pipeline 'videotestsrc ! cairooverlay name=overlay ! autovideosink'
-  rs_gst_overlay --no-overlay --pipeline 'videotestsrc ! autovideosink'
-  GST_PIPELINE='videotestsrc ! cairooverlay name=overlay ! autovideosink' rs_gst_overlay";
+  rs_gst_overlay --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
+  rs_gst_overlay --no-overlay --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
+  GST_PIPELINE='videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink' rs_gst_overlay";
 
 pub enum Action {
     Help,
