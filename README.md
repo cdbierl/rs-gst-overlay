@@ -65,10 +65,13 @@ Pipeline playback stops at end-of-stream or when GStreamer reports an error;
 the window stays open until it is closed. Live sources normally do not reach
 end-of-stream on their own.
 
-## Zoom and crosshair
+## Video controls
 
 Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1× to
 8×. Zoom crops around the center of the frame. Reset returns to 1×.
+
+Use Rotate to turn the video 90° clockwise. Flip H and Flip V toggle horizontal
+and vertical mirroring.
 
 The crosshair is enabled by default. Toggle it at any time with the Crosshair
 checkbox. It is green with 85% opacity and a 4-point stroke. Its lines span

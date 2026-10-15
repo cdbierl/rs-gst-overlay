@@ -203,6 +203,9 @@ struct VideoApp {
     image_size: [usize; 2],
     zoom: f32,
     show_crosshair: bool,
+    rotation_quarters: u8,
+    flip_horizontal: bool,
+    flip_vertical: bool,
 }
 
 impl VideoApp {
@@ -213,6 +216,9 @@ impl VideoApp {
             image_size: [0, 0],
             zoom: 1.0,
             show_crosshair: true,
+            rotation_quarters: 0,
+            flip_horizontal: false,
+            flip_vertical: false,
         }
     }
 
@@ -260,6 +266,27 @@ impl eframe::App for VideoApp {
                     if ui.button("Reset").clicked() {
                         self.zoom = 1.0;
                     }
+                    if ui
+                        .button("Rotate ↻")
+                        .on_hover_text("Rotate video 90° clockwise")
+                        .clicked()
+                    {
+                        self.rotation_quarters = (self.rotation_quarters + 1) % 4;
+                    }
+                    if ui
+                        .add(egui::Button::new("Flip H").selected(self.flip_horizontal))
+                        .on_hover_text("Flip video horizontally")
+                        .clicked()
+                    {
+                        self.flip_horizontal = !self.flip_horizontal;
+                    }
+                    if ui
+                        .add(egui::Button::new("Flip V").selected(self.flip_vertical))
+                        .on_hover_text("Flip video vertically")
+                        .clicked()
+                    {
+                        self.flip_vertical = !self.flip_vertical;
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(egui::Label::new(&message).truncate());
                     });
@@ -272,8 +299,12 @@ impl eframe::App for VideoApp {
             };
 
             let available = ui.available_rect_before_wrap();
-            let image_width = self.image_size[0] as f32;
-            let image_height = self.image_size[1] as f32;
+            let rotated = self.rotation_quarters % 2 == 1;
+            let (image_width, image_height) = if rotated {
+                (self.image_size[1] as f32, self.image_size[0] as f32)
+            } else {
+                (self.image_size[0] as f32, self.image_size[1] as f32)
+            };
             let fit_scale = (available.width() / image_width)
                 .min(available.height() / image_height)
                 .max(0.0);
@@ -290,9 +321,29 @@ impl eframe::App for VideoApp {
             }
 
             let crop = (1.0 - self.zoom.recip()) / 2.0;
-            let uv = Rect::from_min_max(Pos2::new(crop, crop), Pos2::new(1.0 - crop, 1.0 - crop));
             let painter = ui.painter().with_clip_rect(image_rect);
-            painter.image(texture_id, image_rect, uv, Color32::WHITE);
+            let mut mesh = egui::Mesh::with_texture(texture_id);
+            let corners = [
+                (image_rect.left_top(), Pos2::new(0.0, 0.0)),
+                (image_rect.right_top(), Pos2::new(1.0, 0.0)),
+                (image_rect.right_bottom(), Pos2::new(1.0, 1.0)),
+                (image_rect.left_bottom(), Pos2::new(0.0, 1.0)),
+            ];
+            for (position, display_uv) in corners {
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: position,
+                    uv: source_uv(
+                        display_uv,
+                        self.rotation_quarters,
+                        self.flip_horizontal,
+                        self.flip_vertical,
+                        crop,
+                    ),
+                    color: Color32::WHITE,
+                });
+            }
+            mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+            painter.add(egui::Shape::mesh(mesh));
             if self.show_crosshair {
                 paint_crosshair(&painter, image_rect, CrosshairStyle::default());
             }
@@ -303,9 +354,38 @@ impl eframe::App for VideoApp {
     }
 }
 
+fn source_uv(
+    mut display_uv: Pos2,
+    rotation_quarters: u8,
+    flip_horizontal: bool,
+    flip_vertical: bool,
+    crop: f32,
+) -> Pos2 {
+    if flip_horizontal {
+        display_uv.x = 1.0 - display_uv.x;
+    }
+    if flip_vertical {
+        display_uv.y = 1.0 - display_uv.y;
+    }
+
+    let source_uv = match rotation_quarters % 4 {
+        0 => display_uv,
+        1 => Pos2::new(display_uv.y, 1.0 - display_uv.x),
+        2 => Pos2::new(1.0 - display_uv.x, 1.0 - display_uv.y),
+        3 => Pos2::new(1.0 - display_uv.y, display_uv.x),
+        _ => unreachable!(),
+    };
+    let visible_fraction = 1.0 - 2.0 * crop;
+    Pos2::new(
+        crop + source_uv.x * visible_fraction,
+        crop + source_uv.y * visible_fraction,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::frame_from_sample;
+    use super::{frame_from_sample, source_uv};
+    use eframe::egui::Pos2;
     use gst::prelude::*;
     use gstreamer as gst;
     use gstreamer_app as gst_app;
@@ -343,5 +423,39 @@ mod tests {
         let frame = frame_result.unwrap();
         assert_eq!([frame.width, frame.height], [320, 240]);
         assert_eq!(frame.rgba.len(), frame.width * frame.height * 4);
+    }
+
+    #[test]
+    fn maps_display_corners_for_each_quarter_turn() {
+        let top_left = Pos2::new(0.0, 0.0);
+        let expected_source_corners = [
+            Pos2::new(0.0, 0.0),
+            Pos2::new(0.0, 1.0),
+            Pos2::new(1.0, 1.0),
+            Pos2::new(1.0, 0.0),
+        ];
+        for (rotation, expected) in expected_source_corners.into_iter().enumerate() {
+            assert_eq!(
+                source_uv(top_left, rotation as u8, false, false, 0.0),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn maps_flips_and_zoom_crop_to_source_coordinates() {
+        let top_left = Pos2::new(0.0, 0.0);
+        assert_eq!(
+            source_uv(top_left, 0, true, false, 0.0),
+            Pos2::new(1.0, 0.0)
+        );
+        assert_eq!(
+            source_uv(top_left, 0, false, true, 0.0),
+            Pos2::new(0.0, 1.0)
+        );
+        assert_eq!(
+            source_uv(top_left, 0, false, false, 0.25),
+            Pos2::new(0.25, 0.25)
+        );
     }
 }
