@@ -2,6 +2,8 @@ pub const USAGE: &str = "Usage: rs_gst [--pipeline|-p] <PIPELINE>
        rs_gst '<PIPELINE>'
 
 Play a GStreamer pipeline using the Rust GStreamer bindings.
+Include `cairooverlay name=overlay` and exactly one video sink; the app draws a
+centered crosshair with the GStreamer Cairo overlay plugin.
 
 The pipeline may be supplied with --pipeline (or -p), as a quoted positional
 argument, or through GST_PIPELINE. A command-line pipeline takes precedence.

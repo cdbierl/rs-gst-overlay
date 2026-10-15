@@ -1,4 +1,5 @@
 mod cli;
+mod overlay;
 mod pipeline;
 mod player;
 
@@ -44,5 +45,6 @@ fn run() -> Result<(), String> {
 
     gstreamer::init().map_err(|error| format!("could not initialize GStreamer: {error}"))?;
     let pipeline = pipeline::parse(&description)?;
+    overlay::configure_crosshair(&pipeline, overlay::CrosshairStyle::default())?;
     player::play(pipeline)
 }
