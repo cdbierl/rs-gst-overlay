@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, TextureHandle, TextureOptions, Vec2};
 use egui_material3::material_symbol::material_symbol_text;
-use egui_material3::{MaterialCheckbox, MaterialIconButton, MaterialSlider};
+use egui_material3::{MaterialIconButton, MaterialSlider, MaterialSwitch};
 use gst::prelude::*;
 use gst_video::prelude::*;
 use gstreamer as gst;
@@ -275,26 +275,18 @@ impl eframe::App for VideoApp {
         egui::CentralPanel::default().show(context, |ui| {
             ui.vertical(|ui| {
                 egui::Frame::NONE.inner_margin(8.0).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
                     let toolbar_size = Vec2::new(ui.available_width(), TOOLBAR_HEIGHT);
                     ui.allocate_ui_with_layout(
                         toolbar_size,
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
-                            ui.add(MaterialCheckbox::new(&mut self.show_crosshair, "Crosshair"));
+                            ui.label("Crosshair");
+                            ui.add(MaterialSwitch::new(&mut self.show_crosshair));
+                            ui.label("Zoom");
                             ui.add(
-                                MaterialSlider::new(&mut self.zoom, 1.0..=MAX_ZOOM)
-                                    .text("Zoom")
-                                    .width(100.0),
+                                MaterialSlider::new(&mut self.zoom, 1.0..=MAX_ZOOM).width(100.0),
                             );
-                            if ui
-                                .add(MaterialIconButton::standard(material_symbol_text(
-                                    "restart_alt",
-                                )))
-                                .on_hover_text("Reset Zoom")
-                                .clicked()
-                            {
-                                self.zoom = 1.0;
-                            }
                             if ui
                                 .add(MaterialIconButton::standard(material_symbol_text(
                                     "rotate_90_degrees_cw",
