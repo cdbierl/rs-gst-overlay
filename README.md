@@ -74,8 +74,11 @@ horizontal flip, and vertical flip toolbar buttons show descriptions on hover.
 Use Rotate to turn the video 90° clockwise. Flip H and Flip V toggle horizontal
 and vertical mirroring.
 
+The bottom status bar shows the rate of newly displayed video frames and the
+current pipeline status.
+
 The crosshair is enabled by default. Toggle it at any time with the Crosshair
-checkbox. It is green with 85% opacity and a 4-point stroke. Its lines span
+switch. It is green with 85% opacity and a 4-point stroke. Its lines span
 85% of the displayed frame and it has an outlined center circle with a
 50-point radius.
 

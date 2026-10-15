@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, TextureHandle, TextureOptions, Vec2};
 use egui_material3::material_symbol::material_symbol_text;
@@ -214,6 +214,9 @@ struct VideoApp {
     state: Arc<Mutex<SharedState>>,
     texture: Option<TextureHandle>,
     image_size: [usize; 2],
+    fps_interval_start: Instant,
+    frames_in_interval: u64,
+    frames_per_second: f32,
     zoom: f32,
     show_crosshair: bool,
     rotation_quarters: u8,
@@ -227,6 +230,9 @@ impl VideoApp {
             state,
             texture: None,
             image_size: [0, 0],
+            fps_interval_start: Instant::now(),
+            frames_in_interval: 0,
+            frames_per_second: 0.0,
             zoom: 1.0,
             show_crosshair: true,
             rotation_quarters: 0,
@@ -235,7 +241,7 @@ impl VideoApp {
         }
     }
 
-    fn update_texture(&mut self, context: &egui::Context) {
+    fn update_texture(&mut self, context: &egui::Context) -> bool {
         let frame = self
             .state
             .lock()
@@ -243,7 +249,7 @@ impl VideoApp {
             .latest_frame
             .take();
         let Some(frame) = frame else {
-            return;
+            return false;
         };
 
         let image =
@@ -254,18 +260,46 @@ impl VideoApp {
         } else if let Some(texture) = self.texture.as_mut() {
             texture.set(image, TextureOptions::LINEAR);
         }
+
+        true
+    }
+
+    fn update_fps(&mut self, received_frame: bool) {
+        if received_frame {
+            self.frames_in_interval += 1;
+        }
+
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.fps_interval_start);
+        if elapsed >= Duration::from_secs(1) {
+            self.frames_per_second = self.frames_in_interval as f32 / elapsed.as_secs_f32();
+            self.frames_in_interval = 0;
+            self.fps_interval_start = now;
+        }
     }
 }
 
 impl eframe::App for VideoApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        self.update_texture(context);
+        let received_frame = self.update_texture(context);
+        self.update_fps(received_frame);
         let message = self
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .message
             .clone();
+
+        egui::TopBottomPanel::bottom("player_status")
+            .exact_height(30.0)
+            .show(context, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("FPS: {:.1}", self.frames_per_second));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(&message).truncate());
+                    });
+                });
+            });
 
         egui::CentralPanel::default().show(context, |ui| {
             ui.vertical(|ui| {
@@ -301,18 +335,12 @@ impl eframe::App for VideoApp {
                                 &mut self.flip_vertical,
                             ))
                             .on_hover_text("Flip video vertically");
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.add(egui::Label::new(&message).truncate());
-                                },
-                            );
                         },
                     );
                 });
                 ui.separator();
                 let Some(texture_id) = self.texture.as_ref().map(TextureHandle::id) else {
-                    ui.centered_and_justified(|ui| ui.label(message));
+                    ui.centered_and_justified(|ui| ui.label("Waiting for video frames…"));
                     return;
                 };
 
