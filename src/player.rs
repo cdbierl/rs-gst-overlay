@@ -67,11 +67,6 @@ pub fn play(pipeline: gst::Pipeline) -> Result<(), String> {
         Box::new(move |creation_context| {
             egui_material3::theme::setup_local_theme(None);
             egui_material3::theme::load_themes();
-            let global_theme = egui_material3::theme::get_global_theme();
-            if let Ok(mut theme) = global_theme.lock() {
-                theme.theme_mode = egui_material3::ThemeMode::Dark;
-            }
-            creation_context.egui_ctx.set_visuals(egui::Visuals::dark());
             egui_material3::theme::setup_local_fonts_from_bytes(
                 "MaterialSymbolsRounded",
                 include_bytes!("../assets/MaterialSymbolsRounded-Regular.ttf"),
