@@ -103,20 +103,6 @@ impl VideoApp {
             ui.label("Zoom");
             ui.add(MaterialSlider::new(&mut self.zoom, 1.0..=MAX_ZOOM).width(100.0));
 
-            let (icon, tooltip) = if playing {
-                ("stop", "Stop pipeline")
-            } else {
-                ("play_arrow", "Start or restart pipeline")
-            };
-            if ui
-                .add(MaterialIconButton::filled(material_symbol_text(icon)))
-                .on_hover_text(tooltip)
-                .clicked()
-                && !self.stream.set_playing(!playing)
-            {
-                log::error!("Pipeline controls are unavailable");
-            }
-
             if ui
                 .add(MaterialIconButton::standard(material_symbol_text(
                     "rotate_90_degrees_cw",
@@ -136,6 +122,22 @@ impl VideoApp {
                 &mut self.flip_vertical,
             ))
             .on_hover_text("Flip video vertically");
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (icon, tooltip) = if playing {
+                    ("stop", "Stop pipeline")
+                } else {
+                    ("play_arrow", "Start or restart pipeline")
+                };
+                if ui
+                    .add(MaterialIconButton::filled(material_symbol_text(icon)))
+                    .on_hover_text(tooltip)
+                    .clicked()
+                    && !self.stream.set_playing(!playing)
+                {
+                    log::error!("Pipeline controls are unavailable");
+                }
+            });
         });
     }
 
