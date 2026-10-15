@@ -70,10 +70,10 @@ end-of-stream on their own.
 Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1× to
 8×. Zoom crops around the center of the frame. Reset returns to 1×.
 
-The default crosshair is green with 85% opacity and a 4-point stroke. Its lines
-span 85% of the displayed frame and it has an outlined center circle with a
-50-point radius. Pass `--no-overlay` to hide the crosshair while keeping video
-and zoom enabled.
+The crosshair is enabled by default. Toggle it at any time with the Crosshair
+checkbox. It is green with 85% opacity and a 4-point stroke. Its lines span
+85% of the displayed frame and it has an outlined center circle with a
+50-point radius.
 
 ## Logging and tests
 

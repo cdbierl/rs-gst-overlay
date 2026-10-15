@@ -29,7 +29,7 @@ struct SharedState {
     message: String,
 }
 
-pub fn play(pipeline: gst::Pipeline, show_crosshair: bool) -> Result<(), String> {
+pub fn play(pipeline: gst::Pipeline) -> Result<(), String> {
     let element = pipeline
         .by_name(APPSINK_NAME)
         .ok_or_else(|| format!("pipeline must contain an appsink named '{APPSINK_NAME}'"))?;
@@ -47,10 +47,8 @@ pub fn play(pipeline: gst::Pipeline, show_crosshair: bool) -> Result<(), String>
     appsink.set_max_buffers(1);
     appsink.set_drop(true);
 
-    let state = Arc::new(Mutex::new(SharedState {
-        latest_frame: None,
-        message: "Starting pipeline…".to_owned(),
-    }));
+    let state = Arc::new(Mutex::new(SharedState::default()));
+    set_message(&state, "Starting pipeline…".to_owned());
     let stop = Arc::new(AtomicBool::new(false));
     let worker_state = Arc::clone(&state);
     let worker_stop = Arc::clone(&stop);
@@ -63,7 +61,7 @@ pub fn play(pipeline: gst::Pipeline, show_crosshair: bool) -> Result<(), String>
     let result = eframe::run_native(
         "rs_gst_overlay",
         eframe::NativeOptions::default(),
-        Box::new(move |_creation_context| Ok(Box::new(VideoApp::new(app_state, show_crosshair)))),
+        Box::new(move |_creation_context| Ok(Box::new(VideoApp::new(app_state)))),
     );
 
     stop.store(true, Ordering::Relaxed);
@@ -92,9 +90,10 @@ fn stream_frames(
         if let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_mseconds(100)) {
             match frame_from_sample(&sample) {
                 Ok(frame) => {
-                    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-                    state.latest_frame = Some(frame);
-                    state.message = "Pipeline playing".to_owned();
+                    state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .latest_frame = Some(frame);
                 }
                 Err(error) => {
                     set_message(&state, error);
@@ -183,10 +182,19 @@ fn frame_from_sample(sample: &gst::Sample) -> Result<VideoFrame, String> {
 }
 
 fn set_message(state: &Mutex<SharedState>, message: String) {
-    state
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .message = message;
+    let changed = {
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.message == message {
+            false
+        } else {
+            state.message.clone_from(&message);
+            true
+        }
+    };
+
+    if changed {
+        log::info!("Player status: {message}");
+    }
 }
 
 struct VideoApp {
@@ -198,13 +206,13 @@ struct VideoApp {
 }
 
 impl VideoApp {
-    fn new(state: Arc<Mutex<SharedState>>, show_crosshair: bool) -> Self {
+    fn new(state: Arc<Mutex<SharedState>>) -> Self {
         Self {
             state,
             texture: None,
             image_size: [0, 0],
             zoom: 1.0,
-            show_crosshair,
+            show_crosshair: true,
         }
     }
 
@@ -232,8 +240,7 @@ impl VideoApp {
 
 impl eframe::App for VideoApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let context = ui.ctx().clone();
-        self.update_texture(&context);
+        self.update_texture(ui.ctx());
         let message = self
             .state
             .lock()
@@ -242,16 +249,21 @@ impl eframe::App for VideoApp {
             .clone();
 
         ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(&message);
-                ui.add(
-                    egui::Slider::new(&mut self.zoom, 1.0..=MAX_ZOOM)
-                        .text("Zoom")
-                        .suffix("×"),
-                );
-                if ui.button("Reset").clicked() {
-                    self.zoom = 1.0;
-                }
+            egui::Frame::NONE.inner_margin(8.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.show_crosshair, "Crosshair");
+                    ui.add(
+                        egui::Slider::new(&mut self.zoom, 1.0..=MAX_ZOOM)
+                            .text("Zoom")
+                            .suffix("×"),
+                    );
+                    if ui.button("Reset").clicked() {
+                        self.zoom = 1.0;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(&message).truncate());
+                    });
+                });
             });
             ui.separator();
             let Some(texture_id) = self.texture.as_ref().map(TextureHandle::id) else {
@@ -287,7 +299,7 @@ impl eframe::App for VideoApp {
             ui.allocate_rect(image_rect, Sense::hover());
         });
 
-        context.request_repaint_after(Duration::from_millis(16));
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
 }
 

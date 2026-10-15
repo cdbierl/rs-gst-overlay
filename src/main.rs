@@ -31,15 +31,12 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let action = cli::parse_args(env::args().skip(1))?;
-    let (pipeline_arg, no_overlay) = match action {
+    let pipeline_arg = match action {
         cli::Action::Help => {
             println!("{}", cli::USAGE);
             return Ok(());
         }
-        cli::Action::Run {
-            pipeline,
-            no_overlay,
-        } => (pipeline, no_overlay),
+        cli::Action::Run { pipeline } => pipeline,
     };
     let description = match pipeline_arg {
         Some(description) => description,
@@ -51,8 +48,5 @@ fn run() -> Result<(), String> {
 
     gstreamer::init().map_err(|error| format!("could not initialize GStreamer: {error}"))?;
     let pipeline = pipeline::parse(&description)?;
-    if no_overlay {
-        log::info!("Crosshair display disabled");
-    }
-    player::play(pipeline, !no_overlay)
+    player::play(pipeline)
 }
