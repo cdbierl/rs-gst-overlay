@@ -1,3 +1,5 @@
+//! Draws the configurable crosshair overlay over the displayed video.
+
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
 /// Visual settings for the centered crosshair.
@@ -14,16 +16,21 @@ pub struct CrosshairStyle {
 }
 
 impl Default for CrosshairStyle {
+    /// Returns the default green crosshair appearance.
     fn default() -> Self {
         Self {
             color: [0.0, 1.0, 0.0, 0.85],
-            line_width: 4.0,
+            line_width: 2.0,
             length_fraction: 0.85,
             circle_radius: 50.0,
         }
     }
 }
 
+/// Paints a centered crosshair within the supplied video rectangle.
+///
+/// Style values are clamped where necessary to keep color channels, line length,
+/// and stroke dimensions within drawable ranges.
 pub fn paint_crosshair(painter: &Painter, rect: Rect, style: CrosshairStyle) {
     let color = Color32::from_rgba_unmultiplied(
         (style.color[0].clamp(0.0, 1.0) * 255.0) as u8,

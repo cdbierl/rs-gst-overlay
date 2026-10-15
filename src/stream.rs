@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex, mpsc};
+//! Runs the GStreamer pipeline on a worker thread and transfers video frames to the UI.
+
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 
 use gst::prelude::*;
@@ -7,8 +9,10 @@ use gstreamer as gst;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 
+/// Name required for the pipeline's video appsink element.
 const APPSINK_NAME: &str = "video_sink";
 
+/// An owned RGBA video frame ready for upload to an egui texture.
 pub(crate) struct VideoFrame {
     pub(crate) width: usize,
     pub(crate) height: usize,
@@ -16,21 +20,25 @@ pub(crate) struct VideoFrame {
 }
 
 #[derive(Clone)]
+/// Thread-safe controls and status access for the running stream worker.
 pub(crate) struct StreamHandle {
     state: Arc<Mutex<StreamState>>,
     commands: mpsc::Sender<PipelineCommand>,
 }
 
+/// Owns the worker thread and shuts it down when dropped.
 pub(crate) struct StreamWorker {
     commands: mpsc::Sender<PipelineCommand>,
     join_handle: Option<JoinHandle<()>>,
 }
 
+/// Snapshot of the user-visible pipeline message and playback state.
 pub(crate) struct StreamStatus {
     pub(crate) message: String,
     pub(crate) playing: bool,
 }
 
+/// Shared mutable data exchanged between the worker and the UI thread.
 #[derive(Default)]
 struct StreamState {
     latest_frame: Option<VideoFrame>,
@@ -38,35 +46,44 @@ struct StreamState {
     playing: bool,
 }
 
+/// Commands sent from the UI to the pipeline worker.
 enum PipelineCommand {
+    /// Build a fresh runtime and start playback.
     Play,
+    /// Stop the current pipeline runtime.
     Stop,
+    /// Shut down the worker thread.
     Shutdown,
 }
 
+/// GStreamer objects used while a pipeline is active.
 struct PipelineRuntime {
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
     bus: gst::Bus,
 }
 
+/// Acquires stream state, recovering its contents if a previous holder panicked.
+fn lock_state(state: &Mutex<StreamState>) -> MutexGuard<'_, StreamState> {
+    state.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 impl StreamHandle {
+    /// Takes the most recently received frame, leaving the slot empty.
     pub(crate) fn take_latest_frame(&self) -> Option<VideoFrame> {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .latest_frame
-            .take()
+        lock_state(&self.state).latest_frame.take()
     }
 
+    /// Copies the latest status message and playback state.
     pub(crate) fn status(&self) -> StreamStatus {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = lock_state(&self.state);
         StreamStatus {
             message: state.message.clone(),
             playing: state.playing,
         }
     }
 
+    /// Requests playback or stop and reports whether the worker still accepts commands.
     pub(crate) fn set_playing(&self, playing: bool) -> bool {
         let command = if playing {
             PipelineCommand::Play
@@ -78,6 +95,7 @@ impl StreamHandle {
 }
 
 impl Drop for StreamWorker {
+    /// Signals shutdown and waits for the worker to release its GStreamer resources.
     fn drop(&mut self) {
         let _ = self.commands.send(PipelineCommand::Shutdown);
         if let Some(join_handle) = self.join_handle.take()
@@ -88,6 +106,7 @@ impl Drop for StreamWorker {
     }
 }
 
+/// Builds the pipeline, starts its worker thread, and returns the UI handle and worker owner.
 pub(crate) fn start(description: String) -> Result<(StreamHandle, StreamWorker), String> {
     let runtime = build_pipeline_runtime(&description)?;
     let state = Arc::new(Mutex::new(StreamState::default()));
@@ -110,6 +129,7 @@ pub(crate) fn start(description: String) -> Result<(StreamHandle, StreamWorker),
     Ok((handle, worker))
 }
 
+/// Processes pipeline commands, pulls frames, and reports bus errors until shutdown.
 fn run_worker(
     description: String,
     runtime: PipelineRuntime,
@@ -141,10 +161,7 @@ fn run_worker(
             if let Some(sample) = sample {
                 match frame_from_sample(&sample) {
                     Ok(frame) => {
-                        state
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .latest_frame = Some(frame);
+                        lock_state(&state).latest_frame = Some(frame);
                     }
                     Err(error) => {
                         stop_pipeline(&mut runtime, &state, error);
@@ -179,6 +196,7 @@ fn run_worker(
     set_playing(&state, false);
 }
 
+/// Parses the description and configures its named appsink for single-buffer RGBA delivery.
 fn build_pipeline_runtime(description: &str) -> Result<PipelineRuntime, String> {
     let pipeline = crate::pipeline::parse(description)?;
     let element = pipeline
@@ -205,6 +223,7 @@ fn build_pipeline_runtime(description: &str) -> Result<PipelineRuntime, String> 
     })
 }
 
+/// Rebuilds a stopped pipeline from its original description and starts it again.
 fn restart_pipeline(
     description: &str,
     runtime: &mut Option<PipelineRuntime>,
@@ -219,6 +238,7 @@ fn restart_pipeline(
     }
 }
 
+/// Clears pending terminal bus messages and transitions the pipeline to playing.
 fn start_pipeline(runtime: &PipelineRuntime, state: &Mutex<StreamState>) -> bool {
     while runtime
         .bus
@@ -241,6 +261,7 @@ fn start_pipeline(runtime: &PipelineRuntime, state: &Mutex<StreamState>) -> bool
     }
 }
 
+/// Stops and releases the current runtime, then publishes the supplied status message.
 fn stop_pipeline(
     runtime: &mut Option<PipelineRuntime>,
     state: &Mutex<StreamState>,
@@ -253,6 +274,7 @@ fn stop_pipeline(
     set_message(state, message);
 }
 
+/// Converts GStreamer error and end-of-stream bus messages into displayable status text.
 fn pipeline_status(message: gst::Message) -> Option<String> {
     match message.view() {
         gst::MessageView::Error(error) => Some(format!(
@@ -265,16 +287,15 @@ fn pipeline_status(message: gst::Message) -> Option<String> {
     }
 }
 
+/// Updates the shared playing flag.
 fn set_playing(state: &Mutex<StreamState>, playing: bool) {
-    state
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .playing = playing;
+    lock_state(state).playing = playing;
 }
 
+/// Updates and logs the shared status message when its value changes.
 fn set_message(state: &Mutex<StreamState>, message: String) {
     let changed = {
-        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = lock_state(state);
         if state.message == message {
             false
         } else {
@@ -288,6 +309,7 @@ fn set_message(state: &Mutex<StreamState>, message: String) {
     }
 }
 
+/// Copies a sample's RGBA pixels into a tightly packed application-owned frame.
 fn frame_from_sample(sample: &gst::Sample) -> Result<VideoFrame, String> {
     let caps = sample
         .caps()
@@ -347,6 +369,7 @@ fn frame_from_sample(sample: &gst::Sample) -> Result<VideoFrame, String> {
 }
 
 #[cfg(test)]
+/// Exercises appsink frame conversion and pipeline worker restart behavior.
 mod tests {
     use super::{
         PipelineCommand, StreamState, build_pipeline_runtime, frame_from_sample, run_worker,
@@ -358,6 +381,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    /// Pulls a generated RGBA frame and checks its dimensions and byte count.
     fn reads_a_rgba_frame_from_appsink() {
         gst::init().unwrap();
         if !test_video_plugins_available() {
@@ -384,6 +408,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that the worker can stop and then restart a live pipeline.
     fn worker_can_stop_and_restart_pipeline() {
         gst::init().unwrap();
         if !test_video_plugins_available() {
@@ -418,6 +443,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that playback can restart after the pipeline reaches end of stream.
     fn worker_can_restart_pipeline_after_end_of_stream() {
         gst::init().unwrap();
         if !test_video_plugins_available() {
@@ -449,12 +475,14 @@ mod tests {
         worker.join().unwrap();
     }
 
+    /// Reports whether the source, converter, and sink needed by test pipelines exist.
     fn test_video_plugins_available() -> bool {
         gst::ElementFactory::find("videotestsrc").is_some()
             && gst::ElementFactory::find("videoconvert").is_some()
             && gst::ElementFactory::find("appsink").is_some()
     }
 
+    /// Waits up to five seconds for the worker to publish the expected status message.
     fn wait_for_message(state: &Mutex<StreamState>, expected: &str) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {

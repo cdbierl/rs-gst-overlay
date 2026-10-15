@@ -1,41 +1,59 @@
 # rs_gst_overlay
 
-`rs_gst_overlay` displays video from a GStreamer pipeline in a native egui
-window. The pipeline must include an `appsink` named `video_sink`. The viewer
-negotiates RGBA frames from that sink, shows the latest frame, and draws a
-center crosshair over the image. A zoom control and the mouse wheel crop the
-visible frame for digital zoom.
+`rs_gst_overlay` is a Rust desktop viewer for video produced by a GStreamer
+pipeline. It sends frames from a named `appsink` to a native `egui` window,
+where you can inspect the video with a crosshair and adjust its display.
 
-## Requirements
+The viewer requests RGBA frames, reads samples on a worker thread, and keeps
+only the newest frame for display. The window provides zoom, rotation,
+horizontal and vertical flips, a Crosshair switch, a displayed-frame rate, and
+the current pipeline status. The Play/Stop button controls the pipeline and
+restarts it from the original description after it has stopped.
 
-- Rust and Cargo
-- GStreamer development libraries and runtime plugins needed by your pipeline
-- The GStreamer app and video libraries
-- Native windowing and OpenGL development libraries for eframe on your system
+## Dependencies
 
-The video source, decoder, converter, and other GStreamer plugins depend on
-your pipeline. The app requests RGBA output from `video_sink` and keeps at most
-one queued sample so display latency does not build up when rendering falls
-behind.
+### Rust crates
+
+Cargo downloads and builds these direct dependencies:
+
+| Crate | Version | Purpose |
+| --- | --- | --- |
+| `eframe` | 0.33 | Native application window and egui integration |
+| `egui` | 0.33 | Immediate-mode UI and drawing |
+| `egui-material3` | 0.0.9 | Material controls and icon buttons |
+| `gstreamer` | 0.23 | GStreamer initialization and pipeline handling |
+| `gstreamer-app` | 0.23 | Appsink access |
+| `gstreamer-video` | 0.23 | Video caps, frame mapping, and pixel access |
+| `dotenvy` | 0.15 | Loading environment settings from `.env` |
+| `env_logger` | 0.11 | Logging configuration from `RUST_LOG` |
+| `log` | 0.4 | Logging facade |
+
+### Native dependencies
+
+- Rust and Cargo with support for the 2024 edition.
+- GStreamer development libraries, including its app and video libraries.
+- GStreamer runtime plugins required by the selected pipeline. The test-pattern
+  example and stream worker tests use `videotestsrc`, `videoconvert`, and
+  `appsink`.
+- Native windowing and OpenGL development libraries required by `eframe` on
+  your platform. On Linux, this project enables the X11, Wayland, and Glow
+  backends.
+
+The Material Symbols Rounded font is bundled in `assets/` for toolbar icons;
+its license information is in [`assets/README.md`](assets/README.md).
 
 ## Build and run
 
-Build the application with Cargo:
+Build the application:
 
 ```sh
 cargo build
 ```
 
-Run a test pattern in the viewer:
+Run a test pattern:
 
 ```sh
 cargo run -- --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
-```
-
-The executable can also be run directly after building:
-
-```sh
-./target/debug/rs_gst_overlay --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
 ```
 
 Use `--help` to see command-line usage:
@@ -46,9 +64,9 @@ cargo run -- --help
 
 ## Pipeline input
 
-Pass a GStreamer pipeline description with `--pipeline` or `-p`, as one quoted
-positional argument, or through `GST_PIPELINE`. A command-line pipeline takes
-precedence over `GST_PIPELINE`.
+Pass a GStreamer pipeline description with `--pipeline` or `-p`, using the
+`--pipeline=<PIPELINE>` form, as one quoted positional argument, or through
+`GST_PIPELINE`. A command-line pipeline takes precedence over `GST_PIPELINE`.
 
 ```sh
 cargo run -- --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
@@ -56,46 +74,82 @@ cargo run -- 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink na
 GST_PIPELINE='videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink' cargo run
 ```
 
-The pipeline must contain an `appsink` named exactly `video_sink`. The viewer
-sets its caps to `video/x-raw,format=RGBA`, reads samples on a worker thread,
-and passes only the newest copied frame to the window. The pipeline should not
-include a display sink for the same video path.
+### Video file
 
-Pipeline playback stops at end-of-stream or when GStreamer reports an error;
-the window stays open until it is closed. Live sources normally do not reach
-end-of-stream on their own. Use the toolbar Play/Stop button to stop playback or
-restart the pipeline after an error or end-of-stream.
+For a video-only file, use `filesrc` and `decodebin` so GStreamer can select
+the file demuxer and decoder:
 
-## Video controls
+```sh
+cargo run -- --pipeline 'filesrc location="/path/to/video.mp4" ! decodebin ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
+```
 
-Use the Material Zoom slider or scroll the mouse wheel over the video to zoom
-from 1× to 10×. Zoom crops around the center of the frame. The reset, rotate,
-horizontal flip, and vertical flip toolbar buttons show descriptions on hover.
+The required demuxer and decoder plugins depend on the file format. This simple
+form assumes the file has no audio stream; an audio stream also needs to be
+linked to an audio sink.
 
-Use Rotate to turn the video 90° clockwise. Flip H and Flip V toggle horizontal
-and vertical mirroring.
+### Network video stream
 
-The bottom status bar shows the rate of newly displayed video frames and the
-current pipeline status.
+For an H.264 RTSP camera, use `rtspsrc` with its matching RTP depayloader and
+decoder:
 
-The crosshair is enabled by default. Toggle it at any time with the Crosshair
-switch. It is green with 85% opacity and a 4-point stroke. Its lines span
-85% of the displayed frame and it has an outlined center circle with a
-50-point radius.
+```sh
+cargo run -- --pipeline 'rtspsrc location=rtsp://camera.example:8554/stream protocols=tcp latency=200 ! application/x-rtp,media=video,encoding-name=H264 ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
+```
 
-## Logging and tests
+Replace the sample URI with the camera or server address. The RTSP example
+requires plugins for `rtspsrc`, `rtph264depay`, `h264parse`, and `avdec_h264`;
+use the depayloader, parser, and decoder that match your stream's codec.
 
-Logging uses `RUST_LOG` and defaults to `info`:
+The pipeline must contain an `appsink` named exactly `video_sink` and deliver
+video to it. The viewer sets that sink's caps to `video/x-raw,format=RGBA`,
+copies the newest available frame for display, and drops older queued samples
+to limit latency. Do not add a display sink to the same video path.
+
+Playback stops when the pipeline reaches end-of-stream or reports an error. The
+window stays open so you can inspect the status and restart playback. Live
+sources normally do not reach end-of-stream on their own.
+
+## Controls
+
+- Toggle the Crosshair switch to show or hide the centered green crosshair.
+- Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1×
+  to 10×. Zoom crops around the center of the frame.
+- Rotate turns the video 90° clockwise. The horizontal and vertical flip
+  buttons mirror the video in their respective directions.
+- Use the Play/Stop button to control the pipeline. Play restarts it after an
+  error or end-of-stream.
+- The bottom status bar shows the rate of newly displayed frames and the
+  current pipeline status.
+
+The default crosshair uses 85% opacity, a 2-point stroke, lines spanning 85% of
+the displayed frame, and a 50-point-radius center circle.
+
+## Developing
+
+The main source modules are organized by responsibility:
+
+| File | Responsibility |
+| --- | --- |
+| `src/main.rs` | Startup, environment loading, logging, and application launch |
+| `src/cli.rs` | Command-line argument parsing |
+| `src/pipeline.rs` | Parsing GStreamer pipeline descriptions |
+| `src/stream.rs` | Pipeline worker, appsink frame handling, status, and restart logic |
+| `src/player.rs` | egui window, toolbar, video display, and view transforms |
+| `src/overlay.rs` | Crosshair style and painting |
+
+After making changes, run the test suite and code checks:
+
+```sh
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+```
+
+Use `RUST_LOG` to change the application log level. It defaults to `info`:
 
 ```sh
 RUST_LOG=debug cargo run -- --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
 ```
 
 If a `.env` file exists in the current directory or a parent directory, it is
-loaded at startup. It can be used to set `GST_PIPELINE` and logging options.
-
-Run the test suite with:
-
-```sh
-cargo test
-```
+loaded at startup. Use it for settings such as `GST_PIPELINE` and `RUST_LOG`.

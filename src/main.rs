@@ -1,3 +1,5 @@
+//! Starts the GStreamer video player and configures its command-line runtime.
+
 mod cli;
 mod overlay;
 mod pipeline;
@@ -8,6 +10,7 @@ use std::env;
 use std::io::ErrorKind;
 use std::process::ExitCode;
 
+/// Initializes logging and configuration, then returns an appropriate process status.
 fn main() -> ExitCode {
     let dotenv_result = dotenvy::dotenv();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -30,6 +33,7 @@ fn main() -> ExitCode {
     }
 }
 
+/// Parses startup options, initializes GStreamer, and launches the video player.
 fn run() -> Result<(), String> {
     let action = cli::parse_args(env::args().skip(1))?;
     let pipeline_arg = match action {
