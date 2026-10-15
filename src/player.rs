@@ -18,7 +18,6 @@ use crate::overlay::{CrosshairStyle, paint_crosshair};
 
 const APPSINK_NAME: &str = "video_sink";
 const MAX_ZOOM: f32 = 10.0;
-const TOOLBAR_HEIGHT: f32 = 48.0;
 
 struct VideoFrame {
     width: usize,
@@ -290,10 +289,41 @@ impl eframe::App for VideoApp {
             .message
             .clone();
 
+        egui::TopBottomPanel::top("toolbar")
+            .exact_height(48.0)
+            .show(context, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    ui.label("Crosshair");
+                    ui.add(MaterialSwitch::new(&mut self.show_crosshair));
+                    ui.label("Zoom");
+                    ui.add(MaterialSlider::new(&mut self.zoom, 1.0..=MAX_ZOOM).width(100.0));
+                    if ui
+                        .add(MaterialIconButton::standard(material_symbol_text(
+                            "rotate_90_degrees_cw",
+                        )))
+                        .on_hover_text("Rotate video 90° clockwise")
+                        .clicked()
+                    {
+                        self.rotation_quarters = (self.rotation_quarters + 1) % 4;
+                    }
+                    ui.add(MaterialIconButton::toggle(
+                        material_symbol_text("swap_horiz"),
+                        &mut self.flip_horizontal,
+                    ))
+                    .on_hover_text("Flip video horizontally");
+                    ui.add(MaterialIconButton::toggle(
+                        material_symbol_text("swap_vert"),
+                        &mut self.flip_vertical,
+                    ))
+                    .on_hover_text("Flip video vertically");
+                });
+            });
+
         egui::TopBottomPanel::bottom("player_status")
             .exact_height(30.0)
             .show(context, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_centered(|ui| {
                     ui.label(format!("FPS: {:.1}", self.frames_per_second));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(egui::Label::new(&message).truncate());
@@ -302,99 +332,60 @@ impl eframe::App for VideoApp {
             });
 
         egui::CentralPanel::default().show(context, |ui| {
-            ui.vertical(|ui| {
-                egui::Frame::NONE.inner_margin(8.0).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 16.0;
-                    let toolbar_size = Vec2::new(ui.available_width(), TOOLBAR_HEIGHT);
-                    ui.allocate_ui_with_layout(
-                        toolbar_size,
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.label("Crosshair");
-                            ui.add(MaterialSwitch::new(&mut self.show_crosshair));
-                            ui.label("Zoom");
-                            ui.add(
-                                MaterialSlider::new(&mut self.zoom, 1.0..=MAX_ZOOM).width(100.0),
-                            );
-                            if ui
-                                .add(MaterialIconButton::standard(material_symbol_text(
-                                    "rotate_90_degrees_cw",
-                                )))
-                                .on_hover_text("Rotate video 90° clockwise")
-                                .clicked()
-                            {
-                                self.rotation_quarters = (self.rotation_quarters + 1) % 4;
-                            }
-                            ui.add(MaterialIconButton::toggle(
-                                material_symbol_text("swap_horiz"),
-                                &mut self.flip_horizontal,
-                            ))
-                            .on_hover_text("Flip video horizontally");
-                            ui.add(MaterialIconButton::toggle(
-                                material_symbol_text("swap_vert"),
-                                &mut self.flip_vertical,
-                            ))
-                            .on_hover_text("Flip video vertically");
-                        },
-                    );
+            let Some(texture_id) = self.texture.as_ref().map(TextureHandle::id) else {
+                ui.centered_and_justified(|ui| ui.label("Waiting for video frames…"));
+                return;
+            };
+            let available = ui.available_rect_before_wrap();
+            let rotated = self.rotation_quarters % 2 == 1;
+            let (image_width, image_height) = if rotated {
+                (self.image_size[1] as f32, self.image_size[0] as f32)
+            } else {
+                (self.image_size[0] as f32, self.image_size[1] as f32)
+            };
+            let fit_scale = (available.width() / image_width)
+                .min(available.height() / image_height)
+                .max(0.0);
+            let image_size = Vec2::new(image_width, image_height) * fit_scale;
+            let image_rect = Rect::from_center_size(available.center(), image_size);
+
+            if image_rect
+                .contains(ui.input(|input| input.pointer.hover_pos().unwrap_or(Pos2::ZERO)))
+            {
+                let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(1.0, MAX_ZOOM);
+                }
+            }
+
+            let crop = (1.0 - self.zoom.recip()) / 2.0;
+            let painter = ui.painter().with_clip_rect(image_rect);
+            let mut mesh = egui::Mesh::with_texture(texture_id);
+            let corners = [
+                (image_rect.left_top(), Pos2::new(0.0, 0.0)),
+                (image_rect.right_top(), Pos2::new(1.0, 0.0)),
+                (image_rect.right_bottom(), Pos2::new(1.0, 1.0)),
+                (image_rect.left_bottom(), Pos2::new(0.0, 1.0)),
+            ];
+            for (position, display_uv) in corners {
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: position,
+                    uv: source_uv(
+                        display_uv,
+                        self.rotation_quarters,
+                        self.flip_horizontal,
+                        self.flip_vertical,
+                        crop,
+                    ),
+                    color: Color32::WHITE,
                 });
-                ui.separator();
-                let Some(texture_id) = self.texture.as_ref().map(TextureHandle::id) else {
-                    ui.centered_and_justified(|ui| ui.label("Waiting for video frames…"));
-                    return;
-                };
-
-                let available = ui.available_rect_before_wrap();
-                let rotated = self.rotation_quarters % 2 == 1;
-                let (image_width, image_height) = if rotated {
-                    (self.image_size[1] as f32, self.image_size[0] as f32)
-                } else {
-                    (self.image_size[0] as f32, self.image_size[1] as f32)
-                };
-                let fit_scale = (available.width() / image_width)
-                    .min(available.height() / image_height)
-                    .max(0.0);
-                let image_size = Vec2::new(image_width, image_height) * fit_scale;
-                let image_rect = Rect::from_center_size(available.center(), image_size);
-
-                if image_rect
-                    .contains(ui.input(|input| input.pointer.hover_pos().unwrap_or(Pos2::ZERO)))
-                {
-                    let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-                    if scroll != 0.0 {
-                        self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(1.0, MAX_ZOOM);
-                    }
-                }
-
-                let crop = (1.0 - self.zoom.recip()) / 2.0;
-                let painter = ui.painter().with_clip_rect(image_rect);
-                let mut mesh = egui::Mesh::with_texture(texture_id);
-                let corners = [
-                    (image_rect.left_top(), Pos2::new(0.0, 0.0)),
-                    (image_rect.right_top(), Pos2::new(1.0, 0.0)),
-                    (image_rect.right_bottom(), Pos2::new(1.0, 1.0)),
-                    (image_rect.left_bottom(), Pos2::new(0.0, 1.0)),
-                ];
-                for (position, display_uv) in corners {
-                    mesh.vertices.push(egui::epaint::Vertex {
-                        pos: position,
-                        uv: source_uv(
-                            display_uv,
-                            self.rotation_quarters,
-                            self.flip_horizontal,
-                            self.flip_vertical,
-                            crop,
-                        ),
-                        color: Color32::WHITE,
-                    });
-                }
-                mesh.indices.extend([0, 1, 2, 0, 2, 3]);
-                painter.add(egui::Shape::mesh(mesh));
-                if self.show_crosshair {
-                    paint_crosshair(&painter, image_rect, CrosshairStyle::default());
-                }
-                ui.allocate_rect(image_rect, Sense::hover());
-            });
+            }
+            mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+            painter.add(egui::Shape::mesh(mesh));
+            if self.show_crosshair {
+                paint_crosshair(&painter, image_rect, CrosshairStyle::default());
+            }
+            ui.allocate_rect(image_rect, Sense::hover());
         });
 
         context.request_repaint_after(Duration::from_millis(16));
