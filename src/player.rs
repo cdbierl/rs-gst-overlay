@@ -6,6 +6,8 @@ use std::thread;
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, TextureHandle, TextureOptions, Vec2};
+use egui_material3::material_symbol::material_symbol_text;
+use egui_material3::{MaterialCheckbox, MaterialIconButton, MaterialSlider};
 use gst::prelude::*;
 use gst_video::prelude::*;
 use gstreamer as gst;
@@ -15,7 +17,8 @@ use gstreamer_video as gst_video;
 use crate::overlay::{CrosshairStyle, paint_crosshair};
 
 const APPSINK_NAME: &str = "video_sink";
-const MAX_ZOOM: f32 = 8.0;
+const MAX_ZOOM: f32 = 10.0;
+const TOOLBAR_HEIGHT: f32 = 48.0;
 
 struct VideoFrame {
     width: usize,
@@ -61,7 +64,22 @@ pub fn play(pipeline: gst::Pipeline) -> Result<(), String> {
     let result = eframe::run_native(
         "rs_gst_overlay",
         eframe::NativeOptions::default(),
-        Box::new(move |_creation_context| Ok(Box::new(VideoApp::new(app_state)))),
+        Box::new(move |creation_context| {
+            egui_material3::theme::setup_local_theme(None);
+            egui_material3::theme::load_themes();
+            let global_theme = egui_material3::theme::get_global_theme();
+            if let Ok(mut theme) = global_theme.lock() {
+                theme.theme_mode = egui_material3::ThemeMode::Dark;
+            }
+            creation_context.egui_ctx.set_visuals(egui::Visuals::dark());
+            egui_material3::theme::setup_local_fonts_from_bytes(
+                "MaterialSymbolsRounded",
+                include_bytes!("../assets/MaterialSymbolsRounded-Regular.ttf"),
+            );
+            egui_material3::theme::load_fonts(&creation_context.egui_ctx);
+            egui_material3::theme::update_window_background(&creation_context.egui_ctx);
+            Ok(Box::new(VideoApp::new(app_state)))
+        }),
     );
 
     stop.store(true, Ordering::Relaxed);
@@ -245,8 +263,8 @@ impl VideoApp {
 }
 
 impl eframe::App for VideoApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.update_texture(ui.ctx());
+    fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_texture(context);
         let message = self
             .state
             .lock()
@@ -254,103 +272,117 @@ impl eframe::App for VideoApp {
             .message
             .clone();
 
-        ui.vertical(|ui| {
-            egui::Frame::NONE.inner_margin(8.0).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.show_crosshair, "Crosshair");
-                    ui.add(
-                        egui::Slider::new(&mut self.zoom, 1.0..=MAX_ZOOM)
-                            .text("Zoom")
-                            .suffix("×"),
+        egui::CentralPanel::default().show(context, |ui| {
+            ui.vertical(|ui| {
+                egui::Frame::NONE.inner_margin(8.0).show(ui, |ui| {
+                    let toolbar_size = Vec2::new(ui.available_width(), TOOLBAR_HEIGHT);
+                    ui.allocate_ui_with_layout(
+                        toolbar_size,
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(MaterialCheckbox::new(&mut self.show_crosshair, "Crosshair"));
+                            ui.add(
+                                MaterialSlider::new(&mut self.zoom, 1.0..=MAX_ZOOM)
+                                    .text("Zoom")
+                                    .width(100.0),
+                            );
+                            if ui
+                                .add(MaterialIconButton::standard(material_symbol_text(
+                                    "restart_alt",
+                                )))
+                                .on_hover_text("Reset Zoom")
+                                .clicked()
+                            {
+                                self.zoom = 1.0;
+                            }
+                            if ui
+                                .add(MaterialIconButton::standard(material_symbol_text(
+                                    "rotate_90_degrees_cw",
+                                )))
+                                .on_hover_text("Rotate video 90° clockwise")
+                                .clicked()
+                            {
+                                self.rotation_quarters = (self.rotation_quarters + 1) % 4;
+                            }
+                            ui.add(MaterialIconButton::toggle(
+                                material_symbol_text("swap_horiz"),
+                                &mut self.flip_horizontal,
+                            ))
+                            .on_hover_text("Flip video horizontally");
+                            ui.add(MaterialIconButton::toggle(
+                                material_symbol_text("swap_vert"),
+                                &mut self.flip_vertical,
+                            ))
+                            .on_hover_text("Flip video vertically");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.add(egui::Label::new(&message).truncate());
+                                },
+                            );
+                        },
                     );
-                    if ui.button("Reset").clicked() {
-                        self.zoom = 1.0;
-                    }
-                    if ui
-                        .button("Rotate ↻")
-                        .on_hover_text("Rotate video 90° clockwise")
-                        .clicked()
-                    {
-                        self.rotation_quarters = (self.rotation_quarters + 1) % 4;
-                    }
-                    if ui
-                        .add(egui::Button::new("Flip H").selected(self.flip_horizontal))
-                        .on_hover_text("Flip video horizontally")
-                        .clicked()
-                    {
-                        self.flip_horizontal = !self.flip_horizontal;
-                    }
-                    if ui
-                        .add(egui::Button::new("Flip V").selected(self.flip_vertical))
-                        .on_hover_text("Flip video vertically")
-                        .clicked()
-                    {
-                        self.flip_vertical = !self.flip_vertical;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(&message).truncate());
-                    });
                 });
-            });
-            ui.separator();
-            let Some(texture_id) = self.texture.as_ref().map(TextureHandle::id) else {
-                ui.centered_and_justified(|ui| ui.label(message));
-                return;
-            };
+                ui.separator();
+                let Some(texture_id) = self.texture.as_ref().map(TextureHandle::id) else {
+                    ui.centered_and_justified(|ui| ui.label(message));
+                    return;
+                };
 
-            let available = ui.available_rect_before_wrap();
-            let rotated = self.rotation_quarters % 2 == 1;
-            let (image_width, image_height) = if rotated {
-                (self.image_size[1] as f32, self.image_size[0] as f32)
-            } else {
-                (self.image_size[0] as f32, self.image_size[1] as f32)
-            };
-            let fit_scale = (available.width() / image_width)
-                .min(available.height() / image_height)
-                .max(0.0);
-            let image_size = Vec2::new(image_width, image_height) * fit_scale;
-            let image_rect = Rect::from_center_size(available.center(), image_size);
+                let available = ui.available_rect_before_wrap();
+                let rotated = self.rotation_quarters % 2 == 1;
+                let (image_width, image_height) = if rotated {
+                    (self.image_size[1] as f32, self.image_size[0] as f32)
+                } else {
+                    (self.image_size[0] as f32, self.image_size[1] as f32)
+                };
+                let fit_scale = (available.width() / image_width)
+                    .min(available.height() / image_height)
+                    .max(0.0);
+                let image_size = Vec2::new(image_width, image_height) * fit_scale;
+                let image_rect = Rect::from_center_size(available.center(), image_size);
 
-            if image_rect
-                .contains(ui.input(|input| input.pointer.hover_pos().unwrap_or(Pos2::ZERO)))
-            {
-                let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-                if scroll != 0.0 {
-                    self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(1.0, MAX_ZOOM);
+                if image_rect
+                    .contains(ui.input(|input| input.pointer.hover_pos().unwrap_or(Pos2::ZERO)))
+                {
+                    let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+                    if scroll != 0.0 {
+                        self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(1.0, MAX_ZOOM);
+                    }
                 }
-            }
 
-            let crop = (1.0 - self.zoom.recip()) / 2.0;
-            let painter = ui.painter().with_clip_rect(image_rect);
-            let mut mesh = egui::Mesh::with_texture(texture_id);
-            let corners = [
-                (image_rect.left_top(), Pos2::new(0.0, 0.0)),
-                (image_rect.right_top(), Pos2::new(1.0, 0.0)),
-                (image_rect.right_bottom(), Pos2::new(1.0, 1.0)),
-                (image_rect.left_bottom(), Pos2::new(0.0, 1.0)),
-            ];
-            for (position, display_uv) in corners {
-                mesh.vertices.push(egui::epaint::Vertex {
-                    pos: position,
-                    uv: source_uv(
-                        display_uv,
-                        self.rotation_quarters,
-                        self.flip_horizontal,
-                        self.flip_vertical,
-                        crop,
-                    ),
-                    color: Color32::WHITE,
-                });
-            }
-            mesh.indices.extend([0, 1, 2, 0, 2, 3]);
-            painter.add(egui::Shape::mesh(mesh));
-            if self.show_crosshair {
-                paint_crosshair(&painter, image_rect, CrosshairStyle::default());
-            }
-            ui.allocate_rect(image_rect, Sense::hover());
+                let crop = (1.0 - self.zoom.recip()) / 2.0;
+                let painter = ui.painter().with_clip_rect(image_rect);
+                let mut mesh = egui::Mesh::with_texture(texture_id);
+                let corners = [
+                    (image_rect.left_top(), Pos2::new(0.0, 0.0)),
+                    (image_rect.right_top(), Pos2::new(1.0, 0.0)),
+                    (image_rect.right_bottom(), Pos2::new(1.0, 1.0)),
+                    (image_rect.left_bottom(), Pos2::new(0.0, 1.0)),
+                ];
+                for (position, display_uv) in corners {
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: position,
+                        uv: source_uv(
+                            display_uv,
+                            self.rotation_quarters,
+                            self.flip_horizontal,
+                            self.flip_vertical,
+                            crop,
+                        ),
+                        color: Color32::WHITE,
+                    });
+                }
+                mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+                painter.add(egui::Shape::mesh(mesh));
+                if self.show_crosshair {
+                    paint_crosshair(&painter, image_rect, CrosshairStyle::default());
+                }
+                ui.allocate_rect(image_rect, Sense::hover());
+            });
         });
 
-        ui.ctx().request_repaint_after(Duration::from_millis(16));
+        context.request_repaint_after(Duration::from_millis(16));
     }
 }
 

@@ -67,8 +67,9 @@ end-of-stream on their own.
 
 ## Video controls
 
-Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1× to
-8×. Zoom crops around the center of the frame. Reset returns to 1×.
+Use the Material Zoom slider or scroll the mouse wheel over the video to zoom
+from 1× to 8×. Zoom crops around the center of the frame. The reset, rotate,
+horizontal flip, and vertical flip toolbar buttons show descriptions on hover.
 
 Use Rotate to turn the video 90° clockwise. Flip H and Flip V toggle horizontal
 and vertical mirroring.

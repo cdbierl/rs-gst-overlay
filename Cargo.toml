@@ -5,8 +5,9 @@ edition = "2024"
 
 [dependencies]
 dotenvy = "0.15"
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-egui = "0.37.0"
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.33.0"
+egui-material3 = "0.0.9"
 env_logger = "0.11"
 gstreamer = "0.23"
 gstreamer-app = "0.23"
