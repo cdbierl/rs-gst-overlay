@@ -6,7 +6,10 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, TextureHandle, TextureOptio
 use egui_material3::material_symbol::material_symbol_text;
 use egui_material3::{MaterialIconButton, MaterialSlider};
 
-use crate::overlay::{CrosshairStyle, RuleOfThirdsStyle, paint_crosshair, paint_rule_of_thirds};
+use crate::overlay::{
+    CrosshairStyle, RuleOfThirdsStyle, TextureFilter, apply_texture_filter, paint_crosshair,
+    paint_rule_of_thirds,
+};
 use crate::pipeline_catalog::{PipelineCatalog, PipelineEntry};
 use crate::stream::StreamHandle;
 
@@ -68,7 +71,7 @@ struct VideoApp {
     stream: StreamHandle,
     texture: Option<TextureHandle>,
     source_rgba: Option<Vec<u8>>,
-    texture_is_grayscale: Option<bool>,
+    texture_filter: Option<TextureFilter>,
     image_size: [usize; 2],
     fps_interval_start: Instant,
     frames_in_interval: u64,
@@ -106,6 +109,8 @@ enum OverlaySelection {
     RuleOfThirds,
     /// Display the video in greyscale.
     Grayscale,
+    /// Display the video with its RGB colors inverted.
+    Negative,
 }
 
 impl OverlaySelection {
@@ -116,6 +121,16 @@ impl OverlaySelection {
             Self::TargetReticle => "Target Reticle",
             Self::RuleOfThirds => "Rule of Thirds",
             Self::Grayscale => "Greyscale",
+            Self::Negative => "Negative",
+        }
+    }
+
+    /// Returns the image filter selected by this overlay mode.
+    fn texture_filter(self) -> TextureFilter {
+        match self {
+            Self::Grayscale => TextureFilter::Grayscale,
+            Self::Negative => TextureFilter::Negative,
+            Self::None | Self::TargetReticle | Self::RuleOfThirds => TextureFilter::Color,
         }
     }
 }
@@ -131,7 +146,7 @@ impl VideoApp {
             stream,
             texture: None,
             source_rgba: None,
-            texture_is_grayscale: None,
+            texture_filter: None,
             image_size: [0, 0],
             fps_interval_start: Instant::now(),
             frames_in_interval: 0,
@@ -168,8 +183,8 @@ impl VideoApp {
             false
         };
 
-        let grayscale = self.overlay_selection == OverlaySelection::Grayscale;
-        if !received_frame && self.texture_is_grayscale == Some(grayscale) {
+        let texture_filter = self.overlay_selection.texture_filter();
+        if !received_frame && self.texture_filter == Some(texture_filter) {
             return false;
         }
 
@@ -177,12 +192,12 @@ impl VideoApp {
             return false;
         };
 
-        let filtered_rgba = if grayscale {
-            let mut rgba = source_rgba.clone();
-            grayscale_rgba(&mut rgba);
-            Some(rgba)
-        } else {
+        let filtered_rgba = if texture_filter == TextureFilter::Color {
             None
+        } else {
+            let mut rgba = source_rgba.clone();
+            apply_texture_filter(&mut rgba, texture_filter);
+            Some(rgba)
         };
         let display_rgba = filtered_rgba.as_deref().unwrap_or(source_rgba);
 
@@ -193,7 +208,7 @@ impl VideoApp {
             texture.set(image, TextureOptions::LINEAR);
         }
 
-        self.texture_is_grayscale = Some(grayscale);
+        self.texture_filter = Some(texture_filter);
         received_frame
     }
 
@@ -335,17 +350,23 @@ impl VideoApp {
                             OverlaySelection::RuleOfThirds,
                             OverlaySelection::RuleOfThirds.label(),
                         );
+                        ui.separator();
                         ui.selectable_value(
                             &mut self.overlay_selection,
                             OverlaySelection::Grayscale,
                             OverlaySelection::Grayscale.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.overlay_selection,
+                            OverlaySelection::Negative,
+                            OverlaySelection::Negative.label(),
                         );
                     });
             });
             ui.scope(|ui| {
                 ui.spacing_mut().interact_size = Vec2::splat(color_button_size);
                 ui.add_enabled_ui(
-                    self.overlay_selection != OverlaySelection::Grayscale,
+                    self.overlay_selection.texture_filter() == TextureFilter::Color,
                     |ui| {
                         ui.color_edit_button_srgba(&mut self.overlay_color)
                             .on_hover_text("Guide overlay color");
@@ -731,7 +752,7 @@ impl VideoApp {
         painter.add(egui::Shape::mesh(mesh));
         let overlay_color = normalized_srgba(self.overlay_color);
         match self.overlay_selection {
-            OverlaySelection::None | OverlaySelection::Grayscale => {}
+            OverlaySelection::None | OverlaySelection::Grayscale | OverlaySelection::Negative => {}
             OverlaySelection::TargetReticle => {
                 paint_crosshair(
                     &painter,
@@ -839,18 +860,6 @@ fn normalized_srgba(color: Color32) -> [f32; 4] {
         .map(|channel| f32::from(channel) / 255.0)
 }
 
-/// Converts RGBA pixels to greyscale while preserving their alpha channels.
-fn grayscale_rgba(rgba: &mut [u8]) {
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        let luminance = ((u16::from(pixel[0]) * 77
-            + u16::from(pixel[1]) * 150
-            + u16::from(pixel[2]) * 29
-            + 128)
-            >> 8) as u8;
-        pixel[..3].fill(luminance);
-    }
-}
-
 /// Maps a display-space texture coordinate through flips, rotation, and zoom crop.
 fn source_uv(
     mut display_uv: Pos2,
@@ -884,8 +893,8 @@ fn source_uv(
 /// Tests for mapping displayed image corners to source texture coordinates.
 mod tests {
     use super::{
-        OverlaySelection, QUIT_SHORTCUT, TOOLBAR_ROW_HEIGHT, grayscale_rgba,
-        matches_pipeline_query, normalized_srgba, show_wrapped_toolbar_group, source_uv,
+        OverlaySelection, QUIT_SHORTCUT, TOOLBAR_ROW_HEIGHT, matches_pipeline_query,
+        normalized_srgba, show_wrapped_toolbar_group, source_uv,
     };
     use crate::pipeline_catalog::PipelineEntry;
     use eframe::egui::{Color32, Pos2, Sense, Vec2};
@@ -979,19 +988,6 @@ mod tests {
         );
 
         assert!(quit_requested);
-    }
-
-    #[test]
-    /// Converts RGB channels to luminance while retaining per-pixel alpha.
-    fn grayscale_conversion_preserves_alpha() {
-        let mut rgba = vec![255, 0, 0, 17, 0, 255, 0, 128, 0, 0, 255, 255];
-
-        grayscale_rgba(&mut rgba);
-
-        assert_eq!(
-            rgba,
-            vec![77, 77, 77, 17, 149, 149, 149, 128, 29, 29, 29, 255]
-        );
     }
 
     #[test]

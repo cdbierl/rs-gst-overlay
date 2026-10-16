@@ -1,6 +1,41 @@
-//! Draws overlays over the displayed video.
+//! Applies pixel filters and draws overlays over the displayed video.
 
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
+
+/// Pixel transformation applied before a video frame is uploaded as a texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextureFilter {
+    /// Preserve the source colors.
+    Color,
+    /// Convert RGB channels to luminance.
+    Grayscale,
+    /// Invert RGB channels.
+    Negative,
+}
+
+/// Applies a pixel filter to RGBA data without changing alpha channels.
+pub(crate) fn apply_texture_filter(rgba: &mut [u8], filter: TextureFilter) {
+    match filter {
+        TextureFilter::Color => {}
+        TextureFilter::Grayscale => {
+            for pixel in rgba.as_chunks_mut::<4>().0 {
+                let luminance = ((u16::from(pixel[0]) * 77
+                    + u16::from(pixel[1]) * 150
+                    + u16::from(pixel[2]) * 29
+                    + 128)
+                    >> 8) as u8;
+                pixel[..3].fill(luminance);
+            }
+        }
+        TextureFilter::Negative => {
+            for pixel in rgba.as_chunks_mut::<4>().0 {
+                for channel in &mut pixel[..3] {
+                    *channel = 255 - *channel;
+                }
+            }
+        }
+    }
+}
 
 /// Visual settings for the centered crosshair.
 #[derive(Clone, Copy, Debug)]
@@ -37,7 +72,7 @@ pub struct RuleOfThirdsStyle {
 }
 
 impl Default for RuleOfThirdsStyle {
-    /// Returns a subtle white grid appearance.
+    /// Returns the default green grid appearance.
     fn default() -> Self {
         Self {
             color: [0.0, 1.0, 0.0, 0.85],
@@ -106,7 +141,7 @@ pub fn paint_rule_of_thirds(painter: &Painter, rect: Rect, style: RuleOfThirdsSt
 
 #[cfg(test)]
 mod tests {
-    use super::{RuleOfThirdsStyle, paint_rule_of_thirds};
+    use super::{RuleOfThirdsStyle, TextureFilter, apply_texture_filter, paint_rule_of_thirds};
     use egui::{Color32, Id, LayerId, Order, Pos2, RawInput, Rect, Shape, Stroke, Vec2};
 
     #[test]
@@ -155,5 +190,26 @@ mod tests {
             assert_eq!(points, expected_points);
             assert_eq!(stroke, Stroke::new(2.5_f32, color));
         }
+    }
+
+    #[test]
+    fn grayscale_filter_preserves_alpha() {
+        let mut rgba = vec![255, 0, 0, 17, 0, 255, 0, 128, 0, 0, 255, 255];
+
+        apply_texture_filter(&mut rgba, TextureFilter::Grayscale);
+
+        assert_eq!(
+            rgba,
+            vec![77, 77, 77, 17, 149, 149, 149, 128, 29, 29, 29, 255]
+        );
+    }
+
+    #[test]
+    fn negative_filter_preserves_alpha() {
+        let mut rgba = vec![0, 127, 255, 17, 20, 100, 200, 128];
+
+        apply_texture_filter(&mut rgba, TextureFilter::Negative);
+
+        assert_eq!(rgba, vec![255, 128, 0, 17, 235, 155, 55, 128]);
     }
 }

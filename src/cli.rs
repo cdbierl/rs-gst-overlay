@@ -1,29 +1,15 @@
 //! Parses command-line arguments and provides the application's usage text.
 
-/// Command-line usage and examples printed by the help action.
-pub const USAGE: &str = "Usage: rs_gst_overlay [--pipeline <PIPELINE> | -p <PIPELINE>]
-       rs_gst_overlay '<PIPELINE>'
-       rs_gst_overlay
+/// Command-line usage and options printed by the help action.
+pub const USAGE: &str = "Usage: rs_gst_overlay [OPTIONS] [PIPELINE]
 
-Play a GStreamer pipeline in an egui window. The pipeline must contain an
-`appsink` named `video_sink`; its frames are displayed in the window. The
-Overlay picker defaults to None; choose Target reticle or Rule of thirds to
-draw a guide over the video.
-Use the Pipeline picker to search presets and switch playback. You can launch
-the window without a pipeline and select one there. A new command-line or
-GST_PIPELINE description is added to pipelines.yaml with a date-based name.
-Use Edit selected preset to rename it or change its pipeline string.
+View GStreamer video with optional guides and image filters.
 
-The pipeline may be supplied with --pipeline (or -p), as --pipeline=<PIPELINE>,
-as a quoted positional argument, or through GST_PIPELINE. A command-line
-pipeline takes precedence.
-A .env file in the current directory or a parent directory is loaded at startup.
-Logging follows RUST_LOG and defaults to info (for example, RUST_LOG=debug).
+Options:
+  -p, --pipeline <PIPELINE>  GStreamer pipeline to display
+  -h, --help                 Show this help
 
-Examples:
-  rs_gst_overlay --pipeline 'videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink'
-  rs_gst_overlay
-  GST_PIPELINE='videotestsrc ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink' rs_gst_overlay";
+PIPELINE may also be supplied through GST_PIPELINE. If omitted, select a preset in the app.";
 
 /// The action selected from the command-line arguments.
 pub enum Action {

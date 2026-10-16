@@ -151,8 +151,8 @@ presets:
 
 ## Controls
 
-- Use the Overlay picker to show no overlay, a centered target reticle, a
-  rule-of-thirds grid, or the video in greyscale.
+- Choose None, Target Reticle, Rule of Thirds, Greyscale, or Negative from the
+  Overlay picker.
 - Use the adjacent color picker to change the color and opacity of the guide
   overlays.
 - Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1×
