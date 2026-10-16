@@ -131,7 +131,7 @@ that same pipeline is supplied again at a later launch, it will be added again
 automatically.
 
 On first launch, the app creates a config directory and a `pipelines.yaml`
-file containing a test-pattern preset. The config directory is
+file containing the bundled example presets. The config directory is
 `$XDG_CONFIG_HOME/rs_gst_overlay` on Linux (or `~/.config/rs_gst_overlay` when
 `XDG_CONFIG_HOME` is unset), `~/Library/Application Support/rs_gst_overlay` on
 macOS, and `%APPDATA%/rs_gst_overlay` on Windows. Set
@@ -153,18 +153,20 @@ presets:
 
 - Use the Overlay picker to show no overlay, a centered target reticle, or a
   rule-of-thirds grid for checking framing.
+- Use the adjacent color picker to change the overlay's color and opacity.
 - Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1×
   to 10×. Zoom crops around the center of the frame.
 - Rotate turns the video 90° clockwise. The horizontal and vertical flip
   buttons mirror the video in their respective directions.
 - Use the Play/Stop button to control the pipeline. Play restarts it after an
   error or end-of-stream.
+- Press Ctrl+Q to quit the app.
 - The bottom status bar shows the rate of newly displayed frames and the
   current pipeline status.
 
-The target reticle uses 85% opacity, a 2-point stroke, lines spanning 85% of
-the displayed frame, and a 50-point-radius center circle. The rule-of-thirds
-grid uses subtle white lines at one-third and two-thirds of the frame.
+The target reticle uses a 2-point stroke, lines spanning 85% of the displayed
+frame, and a 50-point-radius center circle. The rule-of-thirds grid draws its
+guides at one-third and two-thirds of the frame.
 
 ## Developing
 

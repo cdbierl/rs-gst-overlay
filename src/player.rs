@@ -14,6 +14,9 @@ use crate::stream::StreamHandle;
 const MAX_ZOOM: f32 = 10.0;
 /// Smallest zoom factor, which displays the full frame.
 const MIN_ZOOM: f32 = 1.0;
+/// Keyboard shortcut that closes the app.
+const QUIT_SHORTCUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Q);
 /// Width of the toolbar zoom slider in display points.
 const ZOOM_SLIDER_WIDTH: f32 = 100.0;
 /// Exponential wheel delta multiplier used for zoom changes.
@@ -70,6 +73,7 @@ struct VideoApp {
     frames_per_second: f32,
     zoom: f32,
     overlay_selection: OverlaySelection,
+    overlay_color: Color32,
     rotation_quarters: u8,
     flip_horizontal: bool,
     flip_vertical: bool,
@@ -127,6 +131,7 @@ impl VideoApp {
             frames_per_second: 0.0,
             zoom: MIN_ZOOM,
             overlay_selection: OverlaySelection::default(),
+            overlay_color: Color32::from_rgba_unmultiplied(0, 255, 0, 216),
             rotation_quarters: 0,
             flip_horizontal: false,
             flip_vertical: false,
@@ -274,7 +279,11 @@ impl VideoApp {
     /// Shows the available video overlays beside the pipeline picker.
     fn show_overlay_picker(&mut self, ui: &mut egui::Ui) {
         let popup_item_height = ui.ctx().style().spacing.interact_size.y;
-        let group_width = wrapped_items_width(ui, &[body_text_width(ui, "Overlay"), 140.0]);
+        let color_button_size = 32.0;
+        let group_width = wrapped_items_width(
+            ui,
+            &[body_text_width(ui, "Overlay"), 140.0, color_button_size],
+        );
         show_wrapped_toolbar_group(ui, group_width, |ui| {
             ui.label("Overlay");
             ui.scope(|ui| {
@@ -300,6 +309,11 @@ impl VideoApp {
                             OverlaySelection::RuleOfThirds.label(),
                         );
                     });
+            });
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size = Vec2::splat(color_button_size);
+                ui.color_edit_button_srgba(&mut self.overlay_color)
+                    .on_hover_text("Overlay color");
             });
         });
     }
@@ -678,13 +692,28 @@ impl VideoApp {
         }
         mesh.indices.extend([0, 1, 2, 0, 2, 3]);
         painter.add(egui::Shape::mesh(mesh));
+        let overlay_color = normalized_srgba(self.overlay_color);
         match self.overlay_selection {
             OverlaySelection::None => {}
             OverlaySelection::TargetReticle => {
-                paint_crosshair(&painter, image_rect, CrosshairStyle::default());
+                paint_crosshair(
+                    &painter,
+                    image_rect,
+                    CrosshairStyle {
+                        color: overlay_color,
+                        ..CrosshairStyle::default()
+                    },
+                );
             }
             OverlaySelection::RuleOfThirds => {
-                paint_rule_of_thirds(&painter, image_rect, RuleOfThirdsStyle::default())
+                paint_rule_of_thirds(
+                    &painter,
+                    image_rect,
+                    RuleOfThirdsStyle {
+                        color: overlay_color,
+                        ..RuleOfThirdsStyle::default()
+                    },
+                );
             }
         }
         ui.allocate_rect(image_rect, Sense::hover());
@@ -694,6 +723,11 @@ impl VideoApp {
 impl eframe::App for VideoApp {
     /// Updates stream metrics and lays out the toolbar, video, and status panels.
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if context.input_mut(consume_quit_shortcut) {
+            log::info!("Quit shortcut pressed, closing the application.");
+            context.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
         let received_frame = self.update_texture(context);
         self.update_fps(received_frame);
         let status = self.stream.status();
@@ -761,6 +795,28 @@ fn body_text_width(ui: &egui::Ui, text: &str) -> f32 {
         .x
 }
 
+/// Converts the color picker's selection to normalized sRGBA overlay channels.
+fn normalized_srgba(color: Color32) -> [f32; 4] {
+    color
+        .to_srgba_unmultiplied()
+        .map(|channel| f32::from(channel) / 255.0)
+}
+
+/// Recognizes Ctrl+X, including the cut event emitted by egui's native integration.
+fn consume_quit_shortcut(input: &mut egui::InputState) -> bool {
+    let cut_event = input
+        .events
+        .iter()
+        .any(|event| matches!(event, egui::Event::Cut));
+    if cut_event {
+        input
+            .events
+            .retain(|event| !matches!(event, egui::Event::Cut));
+    }
+
+    cut_event || input.consume_shortcut(&QUIT_SHORTCUT)
+}
+
 /// Maps a display-space texture coordinate through flips, rotation, and zoom crop.
 fn source_uv(
     mut display_uv: Pos2,
@@ -794,11 +850,11 @@ fn source_uv(
 /// Tests for mapping displayed image corners to source texture coordinates.
 mod tests {
     use super::{
-        OverlaySelection, TOOLBAR_ROW_HEIGHT, matches_pipeline_query, show_wrapped_toolbar_group,
-        source_uv,
+        OverlaySelection, TOOLBAR_ROW_HEIGHT, consume_quit_shortcut, matches_pipeline_query,
+        normalized_srgba, show_wrapped_toolbar_group, source_uv,
     };
     use crate::pipeline_catalog::PipelineEntry;
-    use eframe::egui::{Pos2, Sense, Vec2};
+    use eframe::egui::{Color32, Pos2, Sense, Vec2};
 
     #[test]
     /// Maps the displayed upper-left corner correctly for each quarter turn.
@@ -853,6 +909,36 @@ mod tests {
     /// Starts with no overlay selected.
     fn overlay_selection_defaults_to_none() {
         assert_eq!(OverlaySelection::default(), OverlaySelection::None);
+    }
+
+    #[test]
+    /// Preserves the color picker's red, green, blue, and alpha channels for painting.
+    fn picker_color_converts_to_normalized_srgba() {
+        let color = Color32::from_rgba_unmultiplied(64, 128, 255, 192);
+
+        assert_eq!(
+            normalized_srgba(color),
+            [64.0 / 255.0, 128.0 / 255.0, 1.0, 192.0 / 255.0]
+        );
+    }
+
+    #[test]
+    /// Treats egui-winit's native cut event as the Ctrl+X quit shortcut.
+    fn ctrl_x_cut_event_requests_quit() {
+        let context = egui::Context::default();
+        let mut quit_requested = false;
+
+        let _ = context.run(
+            egui::RawInput {
+                events: vec![egui::Event::Cut],
+                ..Default::default()
+            },
+            |context| {
+                quit_requested = context.input_mut(consume_quit_shortcut);
+            },
+        );
+
+        assert!(quit_requested);
     }
 
     #[test]
