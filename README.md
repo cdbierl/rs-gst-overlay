@@ -125,7 +125,10 @@ or `GST_PIPELINE`, it adds that pipeline to the top of `pipelines.yaml` if no
 existing preset has the exact same pipeline string. The generated name uses
 the launch date and time in UTC. In the picker, choose **Edit selected
 preset…** to change its name or edit the full pipeline string. Saving a
-pipeline edit immediately loads the new description.
+pipeline edit immediately loads the new description. **Delete selected
+preset…** removes the entry from the file while leaving playback running. If
+that same pipeline is supplied again at a later launch, it will be added again
+automatically.
 
 On first launch, the app creates a config directory and a `pipelines.yaml`
 file containing a test-pattern preset. The config directory is

@@ -28,8 +28,6 @@ const STATUS_BAR_HEIGHT: f32 = 28.0;
 const FPS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 /// Maximum delay between UI repaint requests.
 const REPAINT_INTERVAL: Duration = Duration::from_millis(16);
-const PIPELINE_PICKER_WIDTH: f32 = 220.0;
-const PIPELINE_PICKER_MAX_HEIGHT: f32 = 260.0;
 
 /// Starts the stream worker and opens the native player window.
 pub fn play(description: Option<String>) -> Result<(), String> {
@@ -80,10 +78,14 @@ struct VideoApp {
     selected_pipeline: Option<PipelineEntry>,
     pipeline_search: String,
     preset_editor_open: bool,
+    preset_editor_original_name: Option<String>,
     preset_editor_original_pipeline: Option<String>,
     preset_editor_name: String,
     preset_editor_pipeline: String,
     preset_editor_error: Option<String>,
+    delete_preset_confirmation_open: bool,
+    delete_preset_target: Option<PipelineEntry>,
+    delete_preset_error: Option<String>,
 }
 
 impl VideoApp {
@@ -110,10 +112,14 @@ impl VideoApp {
             selected_pipeline,
             pipeline_search: String::new(),
             preset_editor_open: false,
+            preset_editor_original_name: None,
             preset_editor_original_pipeline: None,
             preset_editor_name: String::new(),
             preset_editor_pipeline: String::new(),
             preset_editor_error: None,
+            delete_preset_confirmation_open: false,
+            delete_preset_target: None,
+            delete_preset_error: None,
         }
     }
 
@@ -220,6 +226,7 @@ impl VideoApp {
 
     /// Shows searchable named presets and opens the selected pipeline.
     fn show_pipeline_picker(&mut self, ui: &mut egui::Ui) {
+        let popup_item_height = ui.ctx().style().spacing.interact_size.y;
         let presets = self.pipeline_catalog.presets().to_vec();
         let selected_pipeline = self
             .selected_pipeline
@@ -231,60 +238,78 @@ impl VideoApp {
             .as_ref()
             .map(|entry| entry.name.as_str())
             .unwrap_or("Select a pipeline");
-        let can_edit_selected = presets
-            .iter()
-            .any(|entry| entry.pipeline == selected_pipeline);
+        let can_manage_selected =
+            self.pipeline_catalog.can_persist_changes() && self.selected_preset().is_some();
         let mut selected_entry = None;
         let mut edit_selected = false;
+        let mut delete_selected = false;
 
         ui.label("Pipeline");
-        egui::ComboBox::from_id_salt("pipeline_picker")
-            .selected_text(selected_name)
-            .width(PIPELINE_PICKER_WIDTH)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show_ui(ui, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.pipeline_search)
-                        .hint_text("Search pipelines"),
-                );
-                ui.separator();
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 32.0;
+            egui::ComboBox::from_id_salt("pipeline_picker")
+                .selected_text(selected_name)
+                .width(200.0)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show_ui(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = popup_item_height;
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.pipeline_search)
+                            .hint_text("Search pipelines"),
+                    );
+                    ui.separator();
 
-                let query = self.pipeline_search.trim().to_owned();
-                let mut found_match = false;
-                egui::ScrollArea::vertical()
-                    .max_height(PIPELINE_PICKER_MAX_HEIGHT)
-                    .show(ui, |ui| {
-                        for entry in &presets {
-                            if !matches_pipeline_query(entry, &query) {
-                                continue;
+                    let query = self.pipeline_search.trim().to_owned();
+                    let mut found_match = false;
+                    egui::ScrollArea::vertical()
+                        .max_height(250.0)
+                        .show(ui, |ui| {
+                            for entry in &presets {
+                                if !matches_pipeline_query(entry, &query) {
+                                    continue;
+                                }
+                                found_match = true;
+                                let response = ui
+                                    .selectable_label(
+                                        selected_pipeline == entry.pipeline
+                                            && selected_name == entry.name,
+                                        &entry.name,
+                                    )
+                                    .on_hover_text(&entry.pipeline);
+                                if response.clicked() {
+                                    selected_entry = Some(entry.clone());
+                                    ui.close();
+                                }
                             }
-                            found_match = true;
-                            let response = ui
-                                .selectable_label(selected_pipeline == entry.pipeline, &entry.name)
-                                .on_hover_text(&entry.pipeline);
-                            if response.clicked() {
-                                selected_entry = Some(entry.clone());
+
+                            if !found_match {
+                                ui.label("No matching pipelines");
+                            }
+
+                            ui.separator();
+                            if ui
+                                .add_enabled(
+                                    can_manage_selected,
+                                    egui::Button::new("Edit selected preset…"),
+                                )
+                                .clicked()
+                            {
+                                edit_selected = true;
                                 ui.close();
                             }
-                        }
-
-                        if !found_match {
-                            ui.label("No matching pipelines");
-                        }
-
-                        ui.separator();
-                        if ui
-                            .add_enabled(
-                                can_edit_selected,
-                                egui::Button::new("Edit selected preset…"),
-                            )
-                            .clicked()
-                        {
-                            edit_selected = true;
-                            ui.close();
-                        }
-                    });
-            });
+                            if ui
+                                .add_enabled(
+                                    can_manage_selected,
+                                    egui::Button::new("Delete selected preset…"),
+                                )
+                                .clicked()
+                            {
+                                delete_selected = true;
+                                ui.close();
+                            }
+                        });
+                });
+        });
 
         if let Some(entry) = selected_entry {
             self.select_pipeline(entry);
@@ -292,6 +317,18 @@ impl VideoApp {
         if edit_selected {
             self.open_preset_editor();
         }
+        if delete_selected {
+            self.open_delete_preset_confirmation();
+        }
+    }
+
+    /// Finds the exact catalog entry currently selected by the player.
+    fn selected_preset(&self) -> Option<&PipelineEntry> {
+        let selected = self.selected_pipeline.as_ref()?;
+        self.pipeline_catalog
+            .presets()
+            .iter()
+            .find(|entry| entry.name == selected.name && entry.pipeline == selected.pipeline)
     }
 
     /// Switches the active pipeline to the selected preset.
@@ -308,18 +345,17 @@ impl VideoApp {
             return;
         }
 
-        self.selected_pipeline = Some(entry.clone());
+        log::info!("Selected pipeline preset '{}'", entry.name);
+        self.selected_pipeline = Some(entry);
     }
 
     /// Copies the active named preset into the editor dialog.
     fn open_preset_editor(&mut self) {
-        let Some(selected) = self.selected_pipeline.as_ref() else {
-            return;
-        };
-        let Some(preset) = self.pipeline_catalog.find_preset(&selected.pipeline) else {
+        let Some(preset) = self.selected_preset().cloned() else {
             return;
         };
 
+        self.preset_editor_original_name = Some(preset.name.clone());
         self.preset_editor_original_pipeline = Some(preset.pipeline.clone());
         self.preset_editor_name = preset.name;
         self.preset_editor_pipeline = preset.pipeline;
@@ -367,6 +403,12 @@ impl VideoApp {
             });
         self.preset_editor_open = open && !cancel_requested;
 
+        if !self.preset_editor_open && !save_requested {
+            self.preset_editor_original_name = None;
+            self.preset_editor_original_pipeline = None;
+            self.preset_editor_error = None;
+        }
+
         if save_requested {
             self.save_preset_editor();
         }
@@ -374,10 +416,14 @@ impl VideoApp {
 
     /// Persists the edited preset and reloads its pipeline if the string changed.
     fn save_preset_editor(&mut self) {
+        let Some(original_name) = self.preset_editor_original_name.clone() else {
+            return;
+        };
         let Some(original_pipeline) = self.preset_editor_original_pipeline.clone() else {
             return;
         };
         match self.pipeline_catalog.update_preset(
+            &original_name,
             &original_pipeline,
             &self.preset_editor_name,
             &self.preset_editor_pipeline,
@@ -392,8 +438,92 @@ impl VideoApp {
                 self.pipeline_search.clear();
                 self.preset_editor_error = None;
                 self.preset_editor_open = false;
+                self.preset_editor_original_name = None;
+                self.preset_editor_original_pipeline = None;
             }
             Err(error) => self.preset_editor_error = Some(error),
+        }
+    }
+
+    /// Opens a confirmation dialog for the active named preset.
+    fn open_delete_preset_confirmation(&mut self) {
+        let Some(preset) = self.selected_preset().cloned() else {
+            return;
+        };
+
+        self.delete_preset_target = Some(preset);
+        self.delete_preset_error = None;
+        self.delete_preset_confirmation_open = true;
+    }
+
+    /// Confirms and applies deletion of the selected preset.
+    fn show_delete_preset_confirmation(&mut self, context: &egui::Context) {
+        if !self.delete_preset_confirmation_open {
+            return;
+        }
+
+        let mut open = self.delete_preset_confirmation_open;
+        let mut confirm_delete = false;
+        let mut cancel_delete = false;
+        egui::Window::new("Delete pipeline preset")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(context, |ui| {
+                if let Some(target) = &self.delete_preset_target {
+                    ui.label(format!("Delete '{}' from pipelines.yaml?", target.name));
+                    ui.label("Deleting a preset does not stop the current pipeline.");
+                }
+                if let Some(error) = &self.delete_preset_error {
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                }
+
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        confirm_delete = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel_delete = true;
+                    }
+                });
+            });
+        self.delete_preset_confirmation_open = open && !cancel_delete;
+
+        if !self.delete_preset_confirmation_open && !confirm_delete {
+            self.delete_preset_target = None;
+            self.delete_preset_error = None;
+        }
+
+        if confirm_delete {
+            self.delete_selected_preset();
+        }
+    }
+
+    /// Removes the confirmed preset while keeping its current runtime pipeline active.
+    fn delete_selected_preset(&mut self) {
+        let Some(target) = self.delete_preset_target.take() else {
+            return;
+        };
+        match self
+            .pipeline_catalog
+            .delete_preset(&target.name, &target.pipeline)
+        {
+            Ok(()) => {
+                self.selected_pipeline = Some(
+                    self.pipeline_catalog
+                        .find_preset(&target.pipeline)
+                        .unwrap_or_else(|| PipelineEntry {
+                            name: "Current pipeline".to_owned(),
+                            pipeline: target.pipeline.clone(),
+                        }),
+                );
+                self.delete_preset_confirmation_open = false;
+                self.delete_preset_error = None;
+            }
+            Err(error) => {
+                self.delete_preset_target = Some(target);
+                self.delete_preset_error = Some(error);
+            }
         }
     }
 
@@ -495,6 +625,7 @@ impl eframe::App for VideoApp {
 
         egui::CentralPanel::default().show(context, |ui| self.show_video(ui));
         self.show_preset_editor(context);
+        self.show_delete_preset_confirmation(context);
 
         context.request_repaint_after(REPAINT_INTERVAL);
     }

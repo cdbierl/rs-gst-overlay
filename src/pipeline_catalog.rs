@@ -59,6 +59,11 @@ impl PipelineCatalog {
         &self.presets
     }
 
+    /// Reports whether preset changes can be persisted to the user's config file.
+    pub(crate) fn can_persist_changes(&self) -> bool {
+        self.preset_path.is_some()
+    }
+
     /// Finds the preset whose pipeline description matches the supplied text.
     pub(crate) fn find_preset(&self, pipeline: &str) -> Option<PipelineEntry> {
         self.presets
@@ -70,6 +75,7 @@ impl PipelineCatalog {
     /// Adds an unlisted startup pipeline to the preset file and returns its entry.
     pub(crate) fn ensure_startup_preset(&mut self, pipeline: &str) -> PipelineEntry {
         if let Some(entry) = self.find_preset(pipeline) {
+            log::info!("Using existing pipeline preset '{}'", entry.name);
             return entry;
         }
 
@@ -81,8 +87,9 @@ impl PipelineCatalog {
         self.presets.insert(0, entry.clone());
 
         if let Some(path) = &self.preset_path {
-            if let Err(error) = write_presets(path, &self.presets) {
-                log::warn!("Could not save the startup pipeline preset: {error}");
+            match write_presets(path, &self.presets) {
+                Ok(()) => log::info!("Added startup pipeline preset '{}'", entry.name),
+                Err(error) => log::warn!("Could not save the startup pipeline preset: {error}"),
             }
         } else {
             log::warn!("The startup pipeline preset is available for this session only");
@@ -94,6 +101,7 @@ impl PipelineCatalog {
     /// Renames or edits a preset and persists the updated list.
     pub(crate) fn update_preset(
         &mut self,
+        original_name: &str,
         original_pipeline: &str,
         name: &str,
         pipeline: &str,
@@ -109,7 +117,7 @@ impl PipelineCatalog {
         let index = self
             .presets
             .iter()
-            .position(|entry| entry.pipeline == original_pipeline)
+            .position(|entry| entry.name == original_name && entry.pipeline == original_pipeline)
             .ok_or_else(|| "the selected preset is no longer available".to_owned())?;
         if self
             .presets
@@ -136,8 +144,28 @@ impl PipelineCatalog {
         };
         write_presets(path, &updated_presets)?;
         self.presets = updated_presets;
+        log::info!("Updated pipeline preset '{}'", entry.name);
 
         Ok(entry)
+    }
+
+    /// Removes a named preset and persists the remaining list.
+    pub(crate) fn delete_preset(&mut self, name: &str, pipeline: &str) -> Result<(), String> {
+        let index = self
+            .presets
+            .iter()
+            .position(|entry| entry.name == name && entry.pipeline == pipeline)
+            .ok_or_else(|| "the selected preset is no longer available".to_owned())?;
+        let mut updated_presets = self.presets.clone();
+        let removed = updated_presets.remove(index);
+        let Some(path) = &self.preset_path else {
+            return Err("the preset file is not available for editing".to_owned());
+        };
+        write_presets(path, &updated_presets)?;
+        self.presets = updated_presets;
+        log::info!("Deleted pipeline preset '{}'", removed.name);
+
+        Ok(())
     }
 }
 
@@ -206,7 +234,7 @@ fn parse_presets(contents: &str, source: &str) -> Option<Vec<PipelineEntry>> {
     }
 }
 
-/// Writes the complete preset document after a startup pipeline is added.
+/// Writes the complete preset document after a catalog change.
 fn write_presets(path: &Path, presets: &[PipelineEntry]) -> Result<(), String> {
     let contents = serde_yaml_ng::to_string(&PresetsDocument {
         presets: presets.to_vec(),
@@ -223,14 +251,20 @@ fn write_presets(path: &Path, presets: &[PipelineEntry]) -> Result<(), String> {
 /// Returns a unique date-based name for a newly encountered pipeline.
 fn unique_preset_name(presets: &[PipelineEntry], timestamp_seconds: u64) -> String {
     let base_name = format_pipeline_name(timestamp_seconds);
-    if !presets.iter().any(|entry| entry.name == base_name) {
+    if !presets
+        .iter()
+        .any(|entry| entry.name.eq_ignore_ascii_case(&base_name))
+    {
         return base_name;
     }
 
     let mut suffix = 2;
     loop {
         let name = format!("{base_name} ({suffix})");
-        if !presets.iter().any(|entry| entry.name == name) {
+        if !presets
+            .iter()
+            .any(|entry| entry.name.eq_ignore_ascii_case(&name))
+        {
             return name;
         }
         suffix += 1;
@@ -329,20 +363,26 @@ mod tests {
     #[test]
     /// Keeps automatic preset names unique when several pipelines launch together.
     fn automatic_preset_names_get_a_suffix_when_the_timestamp_repeats() {
-        let presets = vec![super::PipelineEntry {
-            name: "Jan 1, 1970 12:00 AM UTC".to_owned(),
-            pipeline: "first ! appsink".to_owned(),
-        }];
+        let presets = vec![
+            super::PipelineEntry {
+                name: "jan 1, 1970 12:00 am utc".to_owned(),
+                pipeline: "first ! appsink".to_owned(),
+            },
+            super::PipelineEntry {
+                name: "JAN 1, 1970 12:00 AM UTC (2)".to_owned(),
+                pipeline: "second ! appsink".to_owned(),
+            },
+        ];
 
         assert_eq!(
             super::unique_preset_name(&presets, 0),
-            "Jan 1, 1970 12:00 AM UTC (2)"
+            "Jan 1, 1970 12:00 AM UTC (3)"
         );
     }
 
     #[test]
     /// Persists an unknown launch pipeline once and reuses an exact string match.
-    fn auto_adds_startup_pipeline_and_deduplicates_exact_strings() {
+    fn startup_pipeline_persists_deduplicates_edits_and_deletes() {
         use std::fs;
         use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -368,14 +408,26 @@ mod tests {
         let persisted =
             super::parse_presets(&fs::read_to_string(&path).unwrap(), "test file").unwrap();
         let reused = catalog.ensure_startup_preset(pipeline);
+        let duplicate = super::PipelineEntry {
+            name: "Same pipeline under another name".to_owned(),
+            pipeline: pipeline.to_owned(),
+        };
+        catalog.presets.insert(0, duplicate.clone());
         let edited = catalog
             .update_preset(
+                &added.name,
                 &added.pipeline,
                 "Camera preset",
                 "rtspsrc location=rtsp://camera ! appsink name=video_sink",
             )
             .unwrap();
         let edited_file =
+            super::parse_presets(&fs::read_to_string(&path).unwrap(), "test file").unwrap();
+        assert_eq!(edited_file, vec![duplicate.clone(), edited.clone()]);
+        catalog
+            .delete_preset(&edited.name, &edited.pipeline)
+            .unwrap();
+        let after_delete =
             super::parse_presets(&fs::read_to_string(&path).unwrap(), "test file").unwrap();
 
         assert_eq!(added.pipeline, pipeline);
@@ -386,8 +438,8 @@ mod tests {
             edited.pipeline,
             "rtspsrc location=rtsp://camera ! appsink name=video_sink"
         );
-        assert_eq!(edited_file, vec![edited]);
-        assert_eq!(catalog.presets.len(), 1);
+        assert_eq!(after_delete, vec![duplicate.clone()]);
+        assert_eq!(catalog.presets, vec![duplicate]);
 
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
