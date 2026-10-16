@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, TextureHandle, TextureOptions, Vec2};
 use egui_material3::material_symbol::material_symbol_text;
-use egui_material3::{MaterialIconButton, MaterialSlider, MaterialSwitch};
+use egui_material3::{MaterialIconButton, MaterialSlider};
 
-use crate::overlay::{CrosshairStyle, paint_crosshair};
+use crate::overlay::{CrosshairStyle, RuleOfThirdsStyle, paint_crosshair, paint_rule_of_thirds};
 use crate::pipeline_catalog::{PipelineCatalog, PipelineEntry};
 use crate::stream::StreamHandle;
 
@@ -69,7 +69,7 @@ struct VideoApp {
     frames_in_interval: u64,
     frames_per_second: f32,
     zoom: f32,
-    show_crosshair: bool,
+    overlay_selection: OverlaySelection,
     rotation_quarters: u8,
     flip_horizontal: bool,
     flip_vertical: bool,
@@ -88,6 +88,29 @@ struct VideoApp {
     delete_preset_error: Option<String>,
 }
 
+/// Overlay drawn over the displayed video.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OverlaySelection {
+    /// Draw no overlay.
+    #[default]
+    None,
+    /// Draw the centered target-reticle crosshair.
+    TargetReticle,
+    /// Draw a rule-of-thirds framing grid.
+    RuleOfThirds,
+}
+
+impl OverlaySelection {
+    /// Returns the label shown in the overlay picker.
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::TargetReticle => "Target Reticle",
+            Self::RuleOfThirds => "Rule of Thirds",
+        }
+    }
+}
+
 impl VideoApp {
     /// Creates a player UI with the stream, pipeline catalog, and selected entry.
     fn new(
@@ -103,7 +126,7 @@ impl VideoApp {
             frames_in_interval: 0,
             frames_per_second: 0.0,
             zoom: MIN_ZOOM,
-            show_crosshair: true,
+            overlay_selection: OverlaySelection::default(),
             rotation_quarters: 0,
             flip_horizontal: false,
             flip_vertical: false,
@@ -169,52 +192,76 @@ impl VideoApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(12.0, 4.0);
                     self.show_pipeline_picker(ui);
-                    ui.label("Crosshair");
-                    ui.add(MaterialSwitch::new(&mut self.show_crosshair));
-                    ui.label("Zoom");
-                    ui.add(
-                        MaterialSlider::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM)
-                            .width(ZOOM_SLIDER_WIDTH)
-                            .show_value(false),
+                    self.show_overlay_picker(ui);
+                    let zoom_value_width = body_text_width(ui, &format!("{:.2}", MAX_ZOOM));
+                    let zoom_group_width = wrapped_items_width(
+                        ui,
+                        &[
+                            body_text_width(ui, "Zoom"),
+                            ZOOM_SLIDER_WIDTH,
+                            zoom_value_width,
+                        ],
                     );
-                    ui.label(format!("{:.2}", self.zoom));
+                    show_wrapped_toolbar_group(ui, zoom_group_width, |ui| {
+                        ui.label("Zoom");
+                        ui.add(
+                            MaterialSlider::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM)
+                                .width(ZOOM_SLIDER_WIDTH)
+                                .show_value(false),
+                        );
+                        ui.label(format!("{:.2}", self.zoom));
+                    });
 
-                    if ui
-                        .add(MaterialIconButton::standard(material_symbol_text(
-                            "rotate_90_degrees_cw",
-                        )))
-                        .on_hover_text("Rotate video 90° clockwise")
-                        .clicked()
-                    {
-                        self.rotation_quarters = (self.rotation_quarters + 1) % 4;
-                    }
-                    ui.add(MaterialIconButton::toggle(
-                        material_symbol_text("swap_horiz"),
-                        &mut self.flip_horizontal,
-                    ))
-                    .on_hover_text("Flip video horizontally");
-                    ui.add(MaterialIconButton::toggle(
-                        material_symbol_text("swap_vert"),
-                        &mut self.flip_vertical,
-                    ))
-                    .on_hover_text("Flip video vertically");
-
-                    let (icon, tooltip) = if playing {
-                        ("stop", "Stop pipeline")
-                    } else {
-                        ("play_arrow", "Start or restart pipeline")
-                    };
-                    if ui
-                        .add_enabled(
-                            playing || self.selected_pipeline.is_some(),
-                            MaterialIconButton::filled(material_symbol_text(icon)),
+                    let icon_button_size = 40.0;
+                    let icon_controls_width = wrapped_items_width(ui, &[icon_button_size; 4]);
+                    show_wrapped_toolbar_group(ui, icon_controls_width, |ui| {
+                        if ui
+                            .add(
+                                MaterialIconButton::standard(material_symbol_text(
+                                    "rotate_90_degrees_cw",
+                                ))
+                                .size(icon_button_size),
+                            )
+                            .on_hover_text("Rotate video 90° clockwise")
+                            .clicked()
+                        {
+                            self.rotation_quarters = (self.rotation_quarters + 1) % 4;
+                        }
+                        ui.add(
+                            MaterialIconButton::toggle(
+                                material_symbol_text("swap_horiz"),
+                                &mut self.flip_horizontal,
+                            )
+                            .size(icon_button_size),
                         )
-                        .on_hover_text(tooltip)
-                        .clicked()
-                        && !self.stream.set_playing(!playing)
-                    {
-                        log::error!("Pipeline controls are unavailable");
-                    }
+                        .on_hover_text("Flip video horizontally");
+                        ui.add(
+                            MaterialIconButton::toggle(
+                                material_symbol_text("swap_vert"),
+                                &mut self.flip_vertical,
+                            )
+                            .size(icon_button_size),
+                        )
+                        .on_hover_text("Flip video vertically");
+
+                        let (icon, tooltip) = if playing {
+                            ("stop", "Stop pipeline")
+                        } else {
+                            ("play_arrow", "Start or restart pipeline")
+                        };
+                        if ui
+                            .add_enabled(
+                                playing || self.selected_pipeline.is_some(),
+                                MaterialIconButton::filled(material_symbol_text(icon))
+                                    .size(icon_button_size),
+                            )
+                            .on_hover_text(tooltip)
+                            .clicked()
+                            && !self.stream.set_playing(!playing)
+                        {
+                            log::error!("Pipeline controls are unavailable");
+                        }
+                    });
                 })
                 .response
                 .rect
@@ -222,6 +269,39 @@ impl VideoApp {
             },
         )
         .inner
+    }
+
+    /// Shows the available video overlays beside the pipeline picker.
+    fn show_overlay_picker(&mut self, ui: &mut egui::Ui) {
+        let popup_item_height = ui.ctx().style().spacing.interact_size.y;
+        let group_width = wrapped_items_width(ui, &[body_text_width(ui, "Overlay"), 140.0]);
+        show_wrapped_toolbar_group(ui, group_width, |ui| {
+            ui.label("Overlay");
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size.y = 32.0;
+                egui::ComboBox::from_id_salt("overlay_picker")
+                    .selected_text(self.overlay_selection.label())
+                    .width(140.0)
+                    .show_ui(ui, |ui| {
+                        ui.spacing_mut().interact_size.y = popup_item_height;
+                        ui.selectable_value(
+                            &mut self.overlay_selection,
+                            OverlaySelection::None,
+                            OverlaySelection::None.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.overlay_selection,
+                            OverlaySelection::TargetReticle,
+                            OverlaySelection::TargetReticle.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.overlay_selection,
+                            OverlaySelection::RuleOfThirds,
+                            OverlaySelection::RuleOfThirds.label(),
+                        );
+                    });
+            });
+        });
     }
 
     /// Shows searchable named presets and opens the selected pipeline.
@@ -244,71 +324,75 @@ impl VideoApp {
         let mut edit_selected = false;
         let mut delete_selected = false;
 
-        ui.label("Pipeline");
-        ui.scope(|ui| {
-            ui.spacing_mut().interact_size.y = 32.0;
-            egui::ComboBox::from_id_salt("pipeline_picker")
-                .selected_text(selected_name)
-                .width(200.0)
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .show_ui(ui, |ui| {
-                    ui.spacing_mut().interact_size.y = popup_item_height;
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.pipeline_search)
-                            .hint_text("Search pipelines"),
-                    );
-                    ui.separator();
+        let group_width = wrapped_items_width(ui, &[body_text_width(ui, "Pipeline"), 200.0]);
+        show_wrapped_toolbar_group(ui, group_width, |ui| {
+            ui.label("Pipeline");
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size.y = 32.0;
+                egui::ComboBox::from_id_salt("pipeline_picker")
+                    .selected_text(selected_name)
+                    .truncate()
+                    .width(200.0)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show_ui(ui, |ui| {
+                        ui.spacing_mut().interact_size.y = popup_item_height;
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.pipeline_search)
+                                .hint_text("Search pipelines"),
+                        );
+                        ui.separator();
 
-                    let query = self.pipeline_search.trim().to_owned();
-                    let mut found_match = false;
-                    egui::ScrollArea::vertical()
-                        .max_height(250.0)
-                        .show(ui, |ui| {
-                            for entry in &presets {
-                                if !matches_pipeline_query(entry, &query) {
-                                    continue;
+                        let query = self.pipeline_search.trim().to_owned();
+                        let mut found_match = false;
+                        egui::ScrollArea::vertical()
+                            .max_height(250.0)
+                            .show(ui, |ui| {
+                                for entry in &presets {
+                                    if !matches_pipeline_query(entry, &query) {
+                                        continue;
+                                    }
+                                    found_match = true;
+                                    let response = ui
+                                        .selectable_label(
+                                            selected_pipeline == entry.pipeline
+                                                && selected_name == entry.name,
+                                            &entry.name,
+                                        )
+                                        .on_hover_text(&entry.pipeline);
+                                    if response.clicked() {
+                                        selected_entry = Some(entry.clone());
+                                        ui.close();
+                                    }
                                 }
-                                found_match = true;
-                                let response = ui
-                                    .selectable_label(
-                                        selected_pipeline == entry.pipeline
-                                            && selected_name == entry.name,
-                                        &entry.name,
+
+                                if !found_match {
+                                    ui.label("No matching pipelines");
+                                }
+
+                                ui.separator();
+                                if ui
+                                    .add_enabled(
+                                        can_manage_selected,
+                                        egui::Button::new("Edit selected preset…"),
                                     )
-                                    .on_hover_text(&entry.pipeline);
-                                if response.clicked() {
-                                    selected_entry = Some(entry.clone());
+                                    .clicked()
+                                {
+                                    edit_selected = true;
                                     ui.close();
                                 }
-                            }
-
-                            if !found_match {
-                                ui.label("No matching pipelines");
-                            }
-
-                            ui.separator();
-                            if ui
-                                .add_enabled(
-                                    can_manage_selected,
-                                    egui::Button::new("Edit selected preset…"),
-                                )
-                                .clicked()
-                            {
-                                edit_selected = true;
-                                ui.close();
-                            }
-                            if ui
-                                .add_enabled(
-                                    can_manage_selected,
-                                    egui::Button::new("Delete selected preset…"),
-                                )
-                                .clicked()
-                            {
-                                delete_selected = true;
-                                ui.close();
-                            }
-                        });
-                });
+                                if ui
+                                    .add_enabled(
+                                        can_manage_selected,
+                                        egui::Button::new("Delete selected preset…"),
+                                    )
+                                    .clicked()
+                                {
+                                    delete_selected = true;
+                                    ui.close();
+                                }
+                            });
+                    });
+            });
         });
 
         if let Some(entry) = selected_entry {
@@ -594,8 +678,14 @@ impl VideoApp {
         }
         mesh.indices.extend([0, 1, 2, 0, 2, 3]);
         painter.add(egui::Shape::mesh(mesh));
-        if self.show_crosshair {
-            paint_crosshair(&painter, image_rect, CrosshairStyle::default());
+        match self.overlay_selection {
+            OverlaySelection::None => {}
+            OverlaySelection::TargetReticle => {
+                paint_crosshair(&painter, image_rect, CrosshairStyle::default());
+            }
+            OverlaySelection::RuleOfThirds => {
+                paint_rule_of_thirds(&painter, image_rect, RuleOfThirdsStyle::default())
+            }
         }
         ui.allocate_rect(image_rect, Sense::hover());
     }
@@ -639,6 +729,38 @@ fn matches_pipeline_query(entry: &PipelineEntry, query: &str) -> bool {
         || entry.pipeline.to_lowercase().contains(&query)
 }
 
+/// Allocates a measured toolbar group so the wrapping row can move it intact.
+fn show_wrapped_toolbar_group<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, TOOLBAR_ROW_HEIGHT),
+        egui::Layout::left_to_right(egui::Align::Center),
+        add_contents,
+    )
+    .inner
+}
+
+/// Measures a row of items, including the spacing between them.
+fn wrapped_items_width(ui: &egui::Ui, item_widths: &[f32]) -> f32 {
+    item_widths.iter().sum::<f32>()
+        + ui.spacing().item_spacing.x * item_widths.len().saturating_sub(1) as f32
+}
+
+/// Measures a single line of body text for sizing a wrapped toolbar group.
+fn body_text_width(ui: &egui::Ui, text: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            text.to_owned(),
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().text_color(),
+        )
+        .size()
+        .x
+}
+
 /// Maps a display-space texture coordinate through flips, rotation, and zoom crop.
 fn source_uv(
     mut display_uv: Pos2,
@@ -671,7 +793,7 @@ fn source_uv(
 #[cfg(test)]
 /// Tests for mapping displayed image corners to source texture coordinates.
 mod tests {
-    use super::{matches_pipeline_query, source_uv};
+    use super::{OverlaySelection, matches_pipeline_query, source_uv};
     use crate::pipeline_catalog::PipelineEntry;
     use eframe::egui::Pos2;
 
@@ -722,5 +844,11 @@ mod tests {
         assert!(matches_pipeline_query(&entry, "camera"));
         assert!(matches_pipeline_query(&entry, "RTSP://CAMERA"));
         assert!(!matches_pipeline_query(&entry, "file source"));
+    }
+
+    #[test]
+    /// Starts with no overlay selected.
+    fn overlay_selection_defaults_to_none() {
+        assert_eq!(OverlaySelection::default(), OverlaySelection::None);
     }
 }

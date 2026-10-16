@@ -6,9 +6,9 @@ pub const USAGE: &str = "Usage: rs_gst_overlay [--pipeline <PIPELINE> | -p <PIPE
        rs_gst_overlay
 
 Play a GStreamer pipeline in an egui window. The pipeline must contain an
-`appsink` named `video_sink`; its frames are displayed in the window. By
-default, the window draws a centered crosshair over the video. Toggle it with
-the Crosshair switch in the window.
+`appsink` named `video_sink`; its frames are displayed in the window. The
+Overlay picker defaults to None; choose Target reticle or Rule of thirds to
+draw a guide over the video.
 Use the Pipeline picker to search presets and switch playback. You can launch
 the window without a pipeline and select one there. A new command-line or
 GST_PIPELINE description is added to pipelines.yaml with a date-based name.

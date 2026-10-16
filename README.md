@@ -2,11 +2,11 @@
 
 `rs_gst_overlay` is a Rust desktop viewer for video produced by a GStreamer
 pipeline. It sends frames from a named `appsink` to a native `egui` window,
-where you can inspect the video with a crosshair and adjust its display.
+where you can choose an overlay and adjust the video's display.
 
 The viewer requests RGBA frames, reads samples on a worker thread, and keeps
-only the newest frame for display. The window provides zoom, rotation,
-horizontal and vertical flips, a Crosshair switch, a displayed-frame rate, and
+only the newest frame for display. The window provides an overlay picker,
+zoom, rotation, horizontal and vertical flips, a displayed-frame rate, and
 the current pipeline status. The Play/Stop button controls the pipeline and
 restarts it from the original description after it has stopped.
 
@@ -151,7 +151,8 @@ presets:
 
 ## Controls
 
-- Toggle the Crosshair switch to show or hide the centered green crosshair.
+- Use the Overlay picker to show no overlay, a centered target reticle, or a
+  rule-of-thirds grid for checking framing.
 - Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1×
   to 10×. Zoom crops around the center of the frame.
 - Rotate turns the video 90° clockwise. The horizontal and vertical flip
@@ -161,8 +162,9 @@ presets:
 - The bottom status bar shows the rate of newly displayed frames and the
   current pipeline status.
 
-The default crosshair uses 85% opacity, a 2-point stroke, lines spanning 85% of
-the displayed frame, and a 50-point-radius center circle.
+The target reticle uses 85% opacity, a 2-point stroke, lines spanning 85% of
+the displayed frame, and a 50-point-radius center circle. The rule-of-thirds
+grid uses subtle white lines at one-third and two-thirds of the frame.
 
 ## Developing
 
@@ -176,7 +178,7 @@ The main source modules are organized by responsibility:
 | `src/pipeline_catalog.rs` | YAML pipeline presets |
 | `src/stream.rs` | Pipeline worker, appsink frame handling, status, and restart logic |
 | `src/player.rs` | egui window, toolbar, video display, and view transforms |
-| `src/overlay.rs` | Crosshair style and painting |
+| `src/overlay.rs` | Target-reticle and rule-of-thirds overlay painting |
 
 After making changes, run the test suite and code checks:
 
