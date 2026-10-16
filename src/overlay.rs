@@ -103,3 +103,57 @@ pub fn paint_rule_of_thirds(painter: &Painter, rect: Rect, style: RuleOfThirdsSt
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{RuleOfThirdsStyle, paint_rule_of_thirds};
+    use egui::{Color32, Id, LayerId, Order, Pos2, RawInput, Rect, Shape, Stroke, Vec2};
+
+    #[test]
+    fn rule_of_thirds_paints_four_guides_with_the_configured_style() {
+        let context = egui::Context::default();
+        let rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(310.0, 220.0));
+        let style = RuleOfThirdsStyle {
+            color: [0.25, 0.5, 0.75, 0.8],
+            line_width: 2.5,
+        };
+        let output = context.run(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                ..Default::default()
+            },
+            |context| {
+                let painter =
+                    context.layer_painter(LayerId::new(Order::Foreground, Id::new("test")));
+                paint_rule_of_thirds(&painter, rect, style);
+            },
+        );
+        let lines = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let color = Color32::from_rgba_unmultiplied(63, 127, 191, 204);
+        let expected_lines = [
+            [Pos2::new(110.0, 20.0), Pos2::new(110.0, 220.0)],
+            [
+                Pos2::new(10.0, 20.0 + 200.0 / 3.0),
+                Pos2::new(310.0, 20.0 + 200.0 / 3.0),
+            ],
+            [Pos2::new(210.0, 20.0), Pos2::new(210.0, 220.0)],
+            [
+                Pos2::new(10.0, 20.0 + 400.0 / 3.0),
+                Pos2::new(310.0, 20.0 + 400.0 / 3.0),
+            ],
+        ];
+
+        assert_eq!(lines.len(), expected_lines.len());
+        for ((points, stroke), expected_points) in lines.into_iter().zip(expected_lines) {
+            assert_eq!(points, expected_points);
+            assert_eq!(stroke, Stroke::new(2.5_f32, color));
+        }
+    }
+}

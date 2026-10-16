@@ -793,9 +793,12 @@ fn source_uv(
 #[cfg(test)]
 /// Tests for mapping displayed image corners to source texture coordinates.
 mod tests {
-    use super::{OverlaySelection, matches_pipeline_query, source_uv};
+    use super::{
+        OverlaySelection, TOOLBAR_ROW_HEIGHT, matches_pipeline_query, show_wrapped_toolbar_group,
+        source_uv,
+    };
     use crate::pipeline_catalog::PipelineEntry;
-    use eframe::egui::Pos2;
+    use eframe::egui::{Pos2, Sense, Vec2};
 
     #[test]
     /// Maps the displayed upper-left corner correctly for each quarter turn.
@@ -850,5 +853,44 @@ mod tests {
     /// Starts with no overlay selected.
     fn overlay_selection_defaults_to_none() {
         assert_eq!(OverlaySelection::default(), OverlaySelection::None);
+    }
+
+    #[test]
+    /// Keeps a measured toolbar group intact when the wrapping row runs out of width.
+    fn wrapped_toolbar_groups_move_as_one_item() {
+        let context = egui::Context::default();
+        let mut group_rects = Vec::new();
+        let _ = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    Vec2::new(250.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(12.0, 4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for _ in 0..2 {
+                            let rect = show_wrapped_toolbar_group(ui, 180.0, |group_ui| {
+                                group_ui.allocate_exact_size(
+                                    Vec2::new(180.0, TOOLBAR_ROW_HEIGHT),
+                                    Sense::hover(),
+                                );
+                                group_ui.min_rect()
+                            });
+                            group_rects.push(rect);
+                        }
+                    });
+                });
+            },
+        );
+
+        assert_eq!(group_rects.len(), 2);
+        assert!(
+            group_rects[1].top() > group_rects[0].top(),
+            "group rectangles: {group_rects:?}"
+        );
     }
 }
