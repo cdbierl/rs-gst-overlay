@@ -198,16 +198,22 @@ fn load_presets(path: &Path) -> (Vec<PipelineEntry>, bool) {
             None => (Vec::new(), false),
         },
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            if let Some(directory) = path.parent()
-                && let Err(error) = fs::create_dir_all(directory)
-            {
-                log::warn!("Could not create config directory: {error}");
-            } else if let Err(error) = fs::write(path, DEFAULT_PRESETS) {
-                log::warn!("Could not create default pipeline presets: {error}");
-            }
+            let can_write = match path.parent().map(fs::create_dir_all) {
+                Some(Err(error)) => {
+                    log::warn!("Could not create config directory: {error}");
+                    false
+                }
+                _ => match fs::write(path, DEFAULT_PRESETS) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        log::warn!("Could not create default pipeline presets: {error}");
+                        false
+                    }
+                },
+            };
             (
                 parse_presets(DEFAULT_PRESETS, "built-in presets").unwrap_or_default(),
-                true,
+                can_write,
             )
         }
         Err(error) => {
@@ -473,5 +479,31 @@ mod tests {
 
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    /// Keeps built-in presets available but disables edits when config creation fails.
+    fn missing_preset_file_with_unavailable_parent_is_session_only() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let blocker = std::env::temp_dir().join(format!(
+            "rs_gst_overlay_config_blocker_{}_{}",
+            std::process::id(),
+            unique_id
+        ));
+        fs::write(&blocker, "not a directory").unwrap();
+        let path = blocker.join("pipelines.yaml");
+
+        let (presets, can_write) = super::load_presets(&path);
+
+        assert!(!presets.is_empty());
+        assert!(!can_write);
+        assert!(blocker.is_file());
+        fs::remove_file(blocker).unwrap();
     }
 }

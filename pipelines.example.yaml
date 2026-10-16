@@ -4,6 +4,6 @@ presets:
       videotestsrc is-live=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=video_sink
   - name: Amcrest Camera
     pipeline: >-
-      rtspsrc location=rtsp://admin:moog1234@10.0.0.105:554 latency=100 ! 
-      queue ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! 
-      appsink name=video_sink
+      rtspsrc location=rtsp://camera.example:554/stream latency=100 !
+      queue ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert !
+      video/x-raw,format=RGBA ! appsink name=video_sink

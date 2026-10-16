@@ -137,6 +137,14 @@ file containing the bundled example presets. The config directory is
 macOS, and `%APPDATA%/rs_gst_overlay` on Windows. Set
 `RS_GST_OVERLAY_CONFIG_DIR` to use a different directory.
 
+Pipeline descriptions are stored as plain text in `pipelines.yaml`. If a
+pipeline contains camera credentials, protect this file and avoid committing
+or sharing it. If the config directory cannot be created, built-in presets
+remain available for the current session, but preset changes cannot be saved.
+The YAML document accepts only the top-level `presets` field and each preset's
+`name` and `pipeline` fields. If it is malformed or contains unknown fields,
+the app leaves it untouched and does not load presets from it.
+
 Add or edit presets in `pipelines.yaml` using this format:
 
 ```yaml
@@ -152,9 +160,10 @@ presets:
 ## Controls
 
 - Choose None, Target Reticle, Rule of Thirds, Greyscale, or Negative from the
-  Overlay picker.
+  Overlay picker. A divider separates the guide overlays from the pixel filters.
 - Use the adjacent color picker to change the color and opacity of the guide
-  overlays.
+  overlays. The crosshair and rule-of-thirds line widths use fixed 2-point
+  strokes.
 - Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1×
   to 10×. Zoom crops around the center of the frame.
 - Rotate turns the video 90° clockwise. The horizontal and vertical flip
@@ -181,7 +190,7 @@ The main source modules are organized by responsibility:
 | `src/pipeline_catalog.rs` | YAML pipeline presets |
 | `src/stream.rs` | Pipeline worker, appsink frame handling, status, and restart logic |
 | `src/player.rs` | egui window, toolbar, video display, and view transforms |
-| `src/overlay.rs` | Target-reticle and rule-of-thirds overlay painting |
+| `src/overlay.rs` | Guide painting and RGBA greyscale/negative pixel filters |
 
 After making changes, run the test suite and code checks:
 
