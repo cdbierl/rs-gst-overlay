@@ -151,9 +151,10 @@ presets:
 
 ## Controls
 
-- Use the Overlay picker to show no overlay, a centered target reticle, or a
-  rule-of-thirds grid for checking framing.
-- Use the adjacent color picker to change the overlay's color and opacity.
+- Use the Overlay picker to show no overlay, a centered target reticle, a
+  rule-of-thirds grid, or the video in greyscale.
+- Use the adjacent color picker to change the color and opacity of the guide
+  overlays.
 - Use the Zoom slider or scroll the mouse wheel over the video to zoom from 1×
   to 10×. Zoom crops around the center of the frame.
 - Rotate turns the video 90° clockwise. The horizontal and vertical flip

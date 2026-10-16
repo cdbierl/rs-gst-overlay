@@ -67,6 +67,8 @@ pub fn play(description: Option<String>) -> Result<(), String> {
 struct VideoApp {
     stream: StreamHandle,
     texture: Option<TextureHandle>,
+    source_rgba: Option<Vec<u8>>,
+    texture_is_grayscale: Option<bool>,
     image_size: [usize; 2],
     fps_interval_start: Instant,
     frames_in_interval: u64,
@@ -92,16 +94,18 @@ struct VideoApp {
     delete_preset_error: Option<String>,
 }
 
-/// Overlay drawn over the displayed video.
+/// Video display mode selected in the overlay picker.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum OverlaySelection {
-    /// Draw no overlay.
+    /// Display the video without a guide or filter.
     #[default]
     None,
     /// Draw the centered target-reticle crosshair.
     TargetReticle,
     /// Draw a rule-of-thirds framing grid.
     RuleOfThirds,
+    /// Display the video in greyscale.
+    Grayscale,
 }
 
 impl OverlaySelection {
@@ -111,6 +115,7 @@ impl OverlaySelection {
             Self::None => "None",
             Self::TargetReticle => "Target Reticle",
             Self::RuleOfThirds => "Rule of Thirds",
+            Self::Grayscale => "Greyscale",
         }
     }
 }
@@ -125,6 +130,8 @@ impl VideoApp {
         Self {
             stream,
             texture: None,
+            source_rgba: None,
+            texture_is_grayscale: None,
             image_size: [0, 0],
             fps_interval_start: Instant::now(),
             frames_in_interval: 0,
@@ -153,21 +160,41 @@ impl VideoApp {
 
     /// Uploads the newest stream frame to the egui texture, if one is available.
     fn update_texture(&mut self, context: &egui::Context) -> bool {
-        let frame = self.stream.take_latest_frame();
-        let Some(frame) = frame else {
+        let received_frame = if let Some(frame) = self.stream.take_latest_frame() {
+            self.image_size = [frame.width, frame.height];
+            self.source_rgba = Some(frame.rgba);
+            true
+        } else {
+            false
+        };
+
+        let grayscale = self.overlay_selection == OverlaySelection::Grayscale;
+        if !received_frame && self.texture_is_grayscale == Some(grayscale) {
+            return false;
+        }
+
+        let Some(source_rgba) = self.source_rgba.as_ref() else {
             return false;
         };
 
-        let image =
-            egui::ColorImage::from_rgba_unmultiplied([frame.width, frame.height], &frame.rgba);
-        if self.image_size != [frame.width, frame.height] {
-            self.image_size = [frame.width, frame.height];
+        let filtered_rgba = if grayscale {
+            let mut rgba = source_rgba.clone();
+            grayscale_rgba(&mut rgba);
+            Some(rgba)
+        } else {
+            None
+        };
+        let display_rgba = filtered_rgba.as_deref().unwrap_or(source_rgba);
+
+        let image = egui::ColorImage::from_rgba_unmultiplied(self.image_size, display_rgba);
+        if self.texture.is_none() {
             self.texture = Some(context.load_texture("video-frame", image, TextureOptions::LINEAR));
         } else if let Some(texture) = self.texture.as_mut() {
             texture.set(image, TextureOptions::LINEAR);
         }
 
-        true
+        self.texture_is_grayscale = Some(grayscale);
+        received_frame
     }
 
     /// Updates the displayed frame rate over a one-second measurement interval.
@@ -308,12 +335,22 @@ impl VideoApp {
                             OverlaySelection::RuleOfThirds,
                             OverlaySelection::RuleOfThirds.label(),
                         );
+                        ui.selectable_value(
+                            &mut self.overlay_selection,
+                            OverlaySelection::Grayscale,
+                            OverlaySelection::Grayscale.label(),
+                        );
                     });
             });
             ui.scope(|ui| {
                 ui.spacing_mut().interact_size = Vec2::splat(color_button_size);
-                ui.color_edit_button_srgba(&mut self.overlay_color)
-                    .on_hover_text("Overlay color");
+                ui.add_enabled_ui(
+                    self.overlay_selection != OverlaySelection::Grayscale,
+                    |ui| {
+                        ui.color_edit_button_srgba(&mut self.overlay_color)
+                            .on_hover_text("Guide overlay color");
+                    },
+                );
             });
         });
     }
@@ -694,7 +731,7 @@ impl VideoApp {
         painter.add(egui::Shape::mesh(mesh));
         let overlay_color = normalized_srgba(self.overlay_color);
         match self.overlay_selection {
-            OverlaySelection::None => {}
+            OverlaySelection::None | OverlaySelection::Grayscale => {}
             OverlaySelection::TargetReticle => {
                 paint_crosshair(
                     &painter,
@@ -723,7 +760,7 @@ impl VideoApp {
 impl eframe::App for VideoApp {
     /// Updates stream metrics and lays out the toolbar, video, and status panels.
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        if context.input_mut(consume_quit_shortcut) {
+        if context.input_mut(|input| input.consume_shortcut(&QUIT_SHORTCUT)) {
             log::info!("Quit shortcut pressed, closing the application.");
             context.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -802,19 +839,16 @@ fn normalized_srgba(color: Color32) -> [f32; 4] {
         .map(|channel| f32::from(channel) / 255.0)
 }
 
-/// Recognizes Ctrl+X, including the cut event emitted by egui's native integration.
-fn consume_quit_shortcut(input: &mut egui::InputState) -> bool {
-    let cut_event = input
-        .events
-        .iter()
-        .any(|event| matches!(event, egui::Event::Cut));
-    if cut_event {
-        input
-            .events
-            .retain(|event| !matches!(event, egui::Event::Cut));
+/// Converts RGBA pixels to greyscale while preserving their alpha channels.
+fn grayscale_rgba(rgba: &mut [u8]) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        let luminance = ((u16::from(pixel[0]) * 77
+            + u16::from(pixel[1]) * 150
+            + u16::from(pixel[2]) * 29
+            + 128)
+            >> 8) as u8;
+        pixel[..3].fill(luminance);
     }
-
-    cut_event || input.consume_shortcut(&QUIT_SHORTCUT)
 }
 
 /// Maps a display-space texture coordinate through flips, rotation, and zoom crop.
@@ -850,8 +884,8 @@ fn source_uv(
 /// Tests for mapping displayed image corners to source texture coordinates.
 mod tests {
     use super::{
-        OverlaySelection, TOOLBAR_ROW_HEIGHT, consume_quit_shortcut, matches_pipeline_query,
-        normalized_srgba, show_wrapped_toolbar_group, source_uv,
+        OverlaySelection, QUIT_SHORTCUT, TOOLBAR_ROW_HEIGHT, grayscale_rgba,
+        matches_pipeline_query, normalized_srgba, show_wrapped_toolbar_group, source_uv,
     };
     use crate::pipeline_catalog::PipelineEntry;
     use eframe::egui::{Color32, Pos2, Sense, Vec2};
@@ -923,22 +957,41 @@ mod tests {
     }
 
     #[test]
-    /// Treats egui-winit's native cut event as the Ctrl+X quit shortcut.
-    fn ctrl_x_cut_event_requests_quit() {
+    /// Recognizes the configured Ctrl+Q quit shortcut.
+    fn ctrl_q_requests_quit() {
         let context = egui::Context::default();
         let mut quit_requested = false;
 
         let _ = context.run(
             egui::RawInput {
-                events: vec![egui::Event::Cut],
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Q,
+                    physical_key: Some(egui::Key::Q),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }],
                 ..Default::default()
             },
             |context| {
-                quit_requested = context.input_mut(consume_quit_shortcut);
+                quit_requested = context.input_mut(|input| input.consume_shortcut(&QUIT_SHORTCUT));
             },
         );
 
         assert!(quit_requested);
+    }
+
+    #[test]
+    /// Converts RGB channels to luminance while retaining per-pixel alpha.
+    fn grayscale_conversion_preserves_alpha() {
+        let mut rgba = vec![255, 0, 0, 17, 0, 255, 0, 128, 0, 0, 255, 255];
+
+        grayscale_rgba(&mut rgba);
+
+        assert_eq!(
+            rgba,
+            vec![77, 77, 77, 17, 149, 149, 149, 128, 29, 29, 29, 255]
+        );
     }
 
     #[test]
